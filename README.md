@@ -1,2 +1,2 @@
 # rgcn-link-prediction
-A pytorch of link-prediction based on rgcn 
+A pytorch implementation of link-prediction based on rgcn 
