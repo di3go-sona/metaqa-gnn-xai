@@ -1,3 +1,4 @@
 FB15k-237/
 wandb/
 venv/
+__pycache__/
