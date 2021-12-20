@@ -1,4 +1,4 @@
-import torch 
+import torch, torch_geometric
 
 class EmbeddingsModel(torch.nn.Module):
     def __init__(self, num_nodes, embedding_size, num_relations) -> None:
@@ -14,6 +14,6 @@ class EmbeddingsModel(torch.nn.Module):
         return self.embeddings
 
 MODELS = {
-    "embeddings": EmbeddingsModel
+    "embeddings": EmbeddingsModel,
     "rgcn": torch_geometric.nn.RGCNConv
 }
