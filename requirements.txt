@@ -1,0 +1,6 @@
+torch==1.10
+torch-scatter -f https://data.pyg.org/whl/torch-1.10.html
+torch-sparse -f https://data.pyg.org/whl/torch-1.10.html
+torch-geometric
+ipykernel
+wandb
