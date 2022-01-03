@@ -1,6 +1,8 @@
+# torch==1.10 -f https://download.pytorch.org/whl/rocm4.2/torch-1.10.0%2Brocm4.2-cp38-cp38-linux_x86_64.whl
 torch==1.10
 torch-scatter -f https://data.pyg.org/whl/torch-1.10.html
 torch-sparse -f https://data.pyg.org/whl/torch-1.10.html
 torch-geometric
 ipykernel
 wandb
+pytorch-lightning
