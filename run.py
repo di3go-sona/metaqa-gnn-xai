@@ -9,10 +9,10 @@ from rgcn_link_pred import GAE, RGCNEncoder, DistMultDecoder
 
 wandb.config = {
     "dataset": 'FB15k-237',
-    "learning_rate": 0.001,
-    "reg": 0.001,
+    "learning_rate": 0.01,
+    "reg": 0.01,
     "epochs": 100,
-    "embeddings_size": 128,
+    "embeddings_size": 500,
     "n_layers": 2
         }
 
@@ -48,9 +48,8 @@ class LinkPredictor(pl.LightningModule):
         self.data = dataset[0]
         self.config = config
         
-        self.encode =  RGCNEncoder(self.data.num_nodes, hidden_channels=16,
-                num_relations=dataset.num_relations)
-        self.decode = DistMultDecoder(dataset.num_relations // 2, hidden_channels=16)
+        self.encode = RGCNEncoder(self.data.num_nodes, self.config['embeddings_size'], dataset.num_relations// 2, self.config['n_layers'] )
+        self.decode = DistMultDecoder(dataset.num_relations // 2, hidden_channels=self.config['embeddings_size'])
 
         self.loss = torch.nn.BCEWithLogitsLoss()
 
@@ -85,9 +84,10 @@ class LinkPredictor(pl.LightningModule):
         out = torch.cat([pos_out, neg_out])
         target = torch.cat([torch.ones_like(pos_out), torch.zeros_like(neg_out)])
         cross_entropy_loss = self.loss(out, target)
-        reg_loss = z.pow(2).mean() + self.decode.rel_emb.pow(2).mean()
-        loss = cross_entropy_loss #+ self.config['reg'] * reg_loss
-        self.log("loss", loss)
+        reg_loss = self.encode.embeddings.pow(2).mean()
+
+        loss = cross_entropy_loss + self.config['reg'] * reg_loss
+        self.log("loss", loss,)
         return loss
         # batch_index, batch_rel = batch
         # pos_subj_index, pos_obj_index = batch_index.T
@@ -108,10 +108,10 @@ class LinkPredictor(pl.LightningModule):
         return loss 
     
     def validation_step(self, batch, batch_idx):
-        edge_index, edge_type = batch
+        edge_index, edge_type = batch[:256]
         z = self.encode(self.data.edge_index, self.data.edge_type)
         ranks = []
-        for i in tqdm(range(edge_type.numel())):
+        for i in tqdm(range(edge_type.numel())[:1024]):
             (src, dst), rel = edge_index.T[:, i], edge_type[i]
 
             # Try all nodes as tails, but delete true triplets:
@@ -191,7 +191,7 @@ wandb_logger = WandbLogger(project="simple-link-pred",  entity="link-prediction-
 model = LinkPredictor(dataset, wandb.config)
 
 # init trainer
-trainer = pl.Trainer( auto_select_gpus= False, logger= wandb_logger, check_val_every_n_epoch= 50)
+trainer = pl.Trainer( auto_select_gpus= False, logger= wandb_logger, check_val_every_n_epoch= 3)
 # train
 trainer.fit(model, train_loader, test_loader)
 
