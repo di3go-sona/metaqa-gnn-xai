@@ -1,9 +1,12 @@
 
+import os
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"]="1"
 
 import wandb, torch, torch_geometric
 
 import pytorch_lightning as pl
-from tqdm import tqdm 
+from tqdm import tqdm
 from pytorch_lightning.loggers import WandbLogger
 from rgcn_link_pred import GAE, RGCNEncoder, DistMultDecoder
 
@@ -191,7 +194,7 @@ wandb_logger = WandbLogger(project="simple-link-pred",  entity="link-prediction-
 model = LinkPredictor(dataset, wandb.config)
 
 # init trainer
-trainer = pl.Trainer( auto_select_gpus= False, logger= wandb_logger, check_val_every_n_epoch= 3)
+trainer = pl.Trainer(gpus=-1, auto_select_gpus=True, logger= wandb_logger, check_val_every_n_epoch= 3)
 # train
 trainer.fit(model, train_loader, test_loader)
 
