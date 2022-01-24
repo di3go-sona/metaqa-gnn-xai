@@ -8,6 +8,12 @@ from pytorch_lightning.trainer.supporters import CombinedLoader
 
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm 
+
+import os
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"]="1"
+
+
 from pytorch_lightning.loggers import WandbLogger
 from rgcn_link_pred import RGCNEncoder, DistMultDecoder, DEVICE
 
