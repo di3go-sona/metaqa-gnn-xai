@@ -1,55 +1,66 @@
-
-
-import wandb, torch, torch_geometric
+#%% 
+import wandb
+import torch
+import torch_geometric
 
 import pytorch_lightning as pl
+from pytorch_lightning.trainer.supporters import CombinedLoader
+
+from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm 
 from pytorch_lightning.loggers import WandbLogger
-from rgcn_link_pred import GAE, RGCNEncoder, DistMultDecoder
+from rgcn_link_pred import RGCNEncoder, DistMultDecoder, DEVICE
 
 wandb.config = {
     "dataset": 'FB15k-237',
     "learning_rate": 0.01,
     "reg": 0.01,
-    "epochs": 100,
-    "embeddings_size": 500,
-    "n_layers": 2
+    "epochs": 1000,
+    "embeddings_size": 256,
+    "batch_size": 1024, # int of 'full'
+    "n_layers": 0
         }
 
-import torch_geometric
-import pickle
 
-dataset = torch_geometric.datasets.RelLinkPredDataset( wandb.config['dataset'],
-                                                         wandb.config['dataset'])
-data = dataset[0]
+
+
+
+
 
 # with open('pickle', 'wb') as file:
 #     t = (data.train_edge_index.T.numpy(), data.train_edge_type.numpy(), data.test_edge_index.T.numpy(), data.test_edge_type.numpy())
 #     pickle.dump(t, file )
 #     exit()
     
-    
+
     
 def negative_sampling(edge_index, num_nodes):
     # Sample edges by corrupting either the subject or the object of each edge.
-    mask_1 = torch.rand(edge_index.size(1)) < 0.5
-    mask_2 = ~mask_1
+    random_mask = torch.rand(edge_index.size(1), device=DEVICE) < 0.5
+
 
     neg_edge_index = edge_index.clone()
-    neg_edge_index[0, mask_1] = torch.randint(num_nodes, (mask_1.sum(), ))
-    neg_edge_index[1, mask_2] = torch.randint(num_nodes, (mask_2.sum(), ))
+    neg_edge_index[0, random_mask] = torch.randint(num_nodes, (random_mask.sum(), ), device=DEVICE)
+    neg_edge_index[1, ~random_mask] = torch.randint(num_nodes, ((~random_mask).sum(), ), device=DEVICE)
     return neg_edge_index
 
 
+
 class LinkPredictor(pl.LightningModule):
-    def __init__(self, dataset, config) -> None:
+    def __init__(self, num_nodes: int, num_relations: int, config: wandb.config) -> None:
         super().__init__()
-        self.dataset = dataset
-        self.data = dataset[0]
+        self.num_nodes = num_nodes
+        self.num_relations = num_relations
+        
+        # self.train_edge_index, self.train_edge_type = train_data.tensors
+        # self.test_edge_index, self.test_edge_type = test_data.tensors
+        # self.valid_edge_index, self.valid_edge_type = valid_data.tensors
+
+        
         self.config = config
         
-        self.encode = RGCNEncoder(self.data.num_nodes, self.config['embeddings_size'], dataset.num_relations// 2, self.config['n_layers'] )
-        self.decode = DistMultDecoder(dataset.num_relations // 2, hidden_channels=self.config['embeddings_size'])
+        self.encode = RGCNEncoder(self.num_nodes, self.config['embeddings_size'], self.num_relations// 2, self.config['n_layers'] )
+        self.decode = DistMultDecoder(self.num_relations // 2, hidden_channels=self.config['embeddings_size'])
 
         self.loss = torch.nn.BCEWithLogitsLoss()
 
@@ -74,20 +85,24 @@ class LinkPredictor(pl.LightningModule):
     #         batch_obj_emb = embeddings[batch_obj_index]
     #         return  (batch_subj_emb * batch_rel_emb * batch_obj_emb ).sum(-1)
         
-    def training_step(self, batch, batch_idx):
-        edge_index, edge_type = batch
-        edge_index = edge_index.T
-        z = self.encode(edge_index, edge_type)
-        neg_edge_index = negative_sampling(edge_index, self.data.num_nodes)
-        pos_out = self.decode(z, edge_index, edge_type)
-        neg_out = self.decode(z, neg_edge_index, edge_type)
-        out = torch.cat([pos_out, neg_out])
-        target = torch.cat([torch.ones_like(pos_out), torch.zeros_like(neg_out)])
-        cross_entropy_loss = self.loss(out, target)
-        reg_loss = self.encode.embeddings.pow(2).mean()
+    def training_step(self, train_batch, batch_idx):
+        train_edge_index, train_edge_type = train_batch
+        train_edge_index = train_edge_index.T
+        
+        z = self.encode(train_edge_index, train_edge_type)
+        
 
-        loss = cross_entropy_loss + self.config['reg'] * reg_loss
-        self.log("loss", loss,)
+        neg_edge_index = negative_sampling(train_edge_index, self.num_nodes)
+        pos_out = self.decode(z, train_edge_index, train_edge_type)
+
+        pos_bce_loss = self.loss(pos_out, torch.ones_like(pos_out)) #self.loss(out, torch.ones_like(out, requires_grad=False))
+        neg_out = self.decode(z, neg_edge_index, train_edge_type)
+        neg_bce_loss = self.loss(neg_out, torch.zeros_like(neg_out)) #self.loss(out, torch.zeros_like(out, requires_grad=False))
+        reg_loss = self.encode.embeddings.pow(2).mean() + sum([ p.pow(2).mean() for p in self.encode.rgnc_weights ])
+        reg_loss = sum([ p.pow(2).mean() for p in self.parameters() ])
+
+        loss = pos_bce_loss + neg_bce_loss + self.config['reg'] * reg_loss
+        self.log("loss", loss.item())
         return loss
         # batch_index, batch_rel = batch
         # pos_subj_index, pos_obj_index = batch_index.T
@@ -107,49 +122,66 @@ class LinkPredictor(pl.LightningModule):
 
         return loss 
     
+    def on_validation_epoch_end(self) -> None:
+        self.z = None
+        
     def validation_step(self, batch, batch_idx):
-        edge_index, edge_type = batch[:256]
-        z = self.encode(self.data.edge_index, self.data.edge_type)
+        (valid_edge_index, valid_edge_type), (train_edge_index, train_edge_type), (all_edge_index, all_edge_type) = batch
+        
+        if batch_idx == 0:
+            self.z = self.encode(train_edge_index.T, train_edge_type)
+            
+        # print(train_edge_index.shape, valid_edge_index.shape, all_edge_index.shape )
+        (valid_src_index, valid_dst_index) = valid_edge_index.T
+        obj_scores = self.decode.score_objs(self.z, valid_src_index, valid_edge_type )
+        print(obj_scores)
+        ranks = obj_scores.argsort(0, descending=True)
+        # ranks = perm[perm == valid_dst_index].float()
+        print(ranks)
+        for k in [1,3,10]:
+            hits = (ranks[:k]== valid_dst_index).float().mean()  * k
+            self.log(f"hit@{k}", hits, on_epoch=True)
+        mrr = (1. / ranks).mean()
+        self.log(f"mrr", mrr, on_epoch=True)
+
+        return 
+        # print(src, dst, rel)
+        # exit()
         ranks = []
-        for i in tqdm(range(edge_type.numel())[:1024]):
-            (src, dst), rel = edge_index.T[:, i], edge_type[i]
-
+        for i in tqdm(range(valid_edge_index.numel())[:1024]):
+            (src, dst), rel = valid_edge_index.T[:, i], valid_edge_type[i]
             # Try all nodes as tails, but delete true triplets:
-            tail_mask = torch.ones(self.data.num_nodes, dtype=torch.bool)
-            for (heads, tails), types in [
-                (self.data.train_edge_index, self.data.train_edge_type),
-                (self.data.valid_edge_index, self.data.valid_edge_type),
-                (self.data.test_edge_index, self.data.test_edge_type),
-            ]:
-                tail_mask[tails[(heads == src) & (types == rel)]] = False
+            tail_mask = torch.ones(self.num_nodes, dtype=torch.bool, device=DEVICE)
+            
+            (heads, tails), types = all_edge_index.T, all_edge_type
+            tail_mask[tails[(heads == src) & (types == rel)]] = False
 
-            tail = torch.arange(self.data.num_nodes)[tail_mask]
-            tail = torch.cat([torch.tensor([dst]), tail])
-            head = torch.full_like(tail, fill_value=src)
+            nodes = torch.arange(self.num_nodes, device=DEVICE)
+            tail = nodes[tail_mask]
+            print(dst)
+            exit()
+            tail = torch.cat([dst, tail])
+            head = torch.full_like(tail, fill_value=src, device=DEVICE)
             eval_edge_index = torch.stack([head, tail], dim=0)
-            eval_edge_type = torch.full_like(tail, fill_value=rel)
+            eval_edge_type = torch.full_like(tail, fill_value=rel, device=DEVICE)
 
-            out = model.decode(z, eval_edge_index, eval_edge_type)
+            out = model.decode(self.z, eval_edge_index, eval_edge_type)
             perm = out.argsort(descending=True)
             rank = int((perm == 0).nonzero(as_tuple=False).view(-1)[0])
             ranks.append(rank + 1)
 
             # Try all nodes as heads, but delete true triplets:
-            head_mask = torch.ones(self.data.num_nodes, dtype=torch.bool)
-            for (heads, tails), types in [
-                (self.data.train_edge_index, self.data.train_edge_type),
-                (self.data.valid_edge_index, self.data.valid_edge_type),
-                (self.data.test_edge_index, self.data.test_edge_type),
-            ]:
-                head_mask[heads[(tails == dst) & (types == rel)]] = False
+            head_mask = torch.ones(self.num_nodes, dtype=torch.bool, device=DEVICE)
+            (heads, tails), types = self.all_edge_index.T, self.all_edge_type
+            head_mask[heads[(tails == dst) & (types == rel)]] = False
 
-            head = torch.arange(self.data.num_nodes)[head_mask]
-            head = torch.cat([torch.tensor([src]), head])
-            tail = torch.full_like(head, fill_value=dst)
+            head = nodes[head_mask]
+            head = torch.cat([torch.tensor([src], device=DEVICE), head])
+            tail = torch.full_like(head, fill_value=dst, device=DEVICE)
             eval_edge_index = torch.stack([head, tail], dim=0)
-            eval_edge_type = torch.full_like(head, fill_value=rel)
+            eval_edge_type = torch.full_like(head, fill_value=rel, device=DEVICE)
 
-            out = model.decode(z, eval_edge_index, eval_edge_type)
+            out = model.decode(self.z, eval_edge_index, eval_edge_type)
             perm = out.argsort(descending=True)
             rank = int((perm == 0).nonzero(as_tuple=False).view(-1)[0])
             ranks.append(rank + 1)
@@ -174,26 +206,65 @@ class LinkPredictor(pl.LightningModule):
         #     self.log(f"hit@{k}", hits, on_epoch=True)
 
 
+class FB15KData(pl.LightningDataModule):
+    def __init__(self):
+        super().__init__()
+        dataset = torch_geometric.datasets.RelLinkPredDataset( wandb.config['dataset'],
+                                                wandb.config['dataset'])
+        
+        data = dataset[0]
+        self.num_nodes = data.num_nodes
+        self.num_relations = dataset.num_relations
 
-data = dataset[0]
+        self.train_data = TensorDataset(data.train_edge_index.T, data.train_edge_type)
+        self.test_data = TensorDataset(data.test_edge_index.T, data.test_edge_type)
+        self.valid_data = TensorDataset(data.valid_edge_index.T, data.valid_edge_type)
+        self.all_data = TensorDataset( torch.cat((data.train_edge_index.T, data.test_edge_index.T, data.valid_edge_index.T)),
+                                      torch.cat((data.train_edge_type, data.test_edge_type, data.valid_edge_type)))
 
-train_dataset = torch.utils.data.TensorDataset(data.train_edge_index.T, data.train_edge_type)
-test_dataset = torch.utils.data.TensorDataset(data.test_edge_index.T, data.test_edge_type)
+        
+    def train_dataloader(self):
+        return DataLoader( self.train_data,  
+                          len(self.train_data) if wandb.config['batch_size'] == 'full' else wandb.config['batch_size'], 
+                          drop_last=True, 
+                          shuffle=True)
+        # return DataLoader( self.train_data,  len(self.train_data), drop_last=True, shuffle=True)
+    def val_dataloader(self):
+        return CombinedLoader([ 
+            DataLoader( self.test_data, batch_size=64, shuffle=True),
+            DataLoader( self.train_data, batch_size=len(self.train_data)),
+            DataLoader( self.all_data, batch_size=len(self.all_data))
+        ], 'max_size_cycle')
+        
+
+    def test_dataloader(self):
+        return self.val_dataloader()
+    
 
 
-train_loader =  torch.utils.data.DataLoader( train_dataset, len(train_dataset), shuffle=True, drop_last=False)
-test_loader =  torch.utils.data.DataLoader( test_dataset, len(test_dataset), drop_last=False)
 
-# setup logger
-wandb_logger = WandbLogger(project="simple-link-pred",  entity="link-prediction-gnn")
+
+data = FB15KData()
+#%% 
+
+
+wandb_logger = None or WandbLogger(project="simple-link-pred",  entity="link-prediction-gnn")
 
 # init model
-model = LinkPredictor(dataset, wandb.config)
+model = LinkPredictor(data.num_nodes, data.num_relations, wandb.config)
 
+gpu_args = {'gpus':-1, 'auto_select_gpus':True } if DEVICE == 'cuda' else {}
 # init trainer
-trainer = pl.Trainer( auto_select_gpus= False, logger= wandb_logger, check_val_every_n_epoch= 3)
+trainer = pl.Trainer( **gpu_args,
+                     logger= wandb_logger, 
+                     limit_val_batches = 0.05,
+                     check_val_every_n_epoch=5, 
+                     log_every_n_steps=1, 
+                     max_epochs=wandb.config['epochs'],
+                     profiler="simple",
+                     auto_scale_batch_size=True)
 # train
-trainer.fit(model, train_loader, test_loader)
+trainer.fit(model, data)
 
 
 

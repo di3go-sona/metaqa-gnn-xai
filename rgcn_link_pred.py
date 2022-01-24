@@ -18,7 +18,7 @@ from torch_geometric.datasets import RelLinkPredDataset
 import torch_scatter
 
 data = RelLinkPredDataset('FB15k-237', 'FB15k-237')[0]
-
+DEVICE='cpu'
 
 class RGCNEncoder(torch.nn.Module):
     def __init__(self, n_nodes, hidden_channels, n_relations, n_layers=3):
@@ -28,60 +28,85 @@ class RGCNEncoder(torch.nn.Module):
         self.E = hidden_channels
         self.L = n_layers
 
-        self.embeddings = torch.nn.Parameter( torch.randn(n_nodes, hidden_channels, requires_grad=True) )
-        self.rgnc_weights = torch.nn.ParameterList( [ torch.nn.Parameter(torch.randn(n_relations*2, hidden_channels, hidden_channels, requires_grad=True)) for _ in range(n_layers) ] )
-        self.rgnc_biases = torch.nn.ParameterList( [ torch.nn.Parameter(torch.randn(n_relations*2, hidden_channels, requires_grad=True)) for _ in range(n_layers) ] )
+        self.embeddings = torch.nn.Parameter( torch.rand(n_nodes, hidden_channels, requires_grad=True) )
+        self.rgnc_weights = torch.nn.ParameterList( [ torch.nn.Parameter(torch.rand(n_relations*2, hidden_channels, hidden_channels, requires_grad=True)) for _ in range(n_layers) ] )
+        self.rgnc_biases = torch.nn.ParameterList( [ torch.nn.Parameter(torch.rand(n_relations*2, hidden_channels, requires_grad=True)) for _ in range(n_layers) ] )
         self.relu = torch.nn.ReLU()
 
+    def get_messages(self, edge_index, edge_type, l):
+        hidden = self.embeddings
+        for r in range(self.R):
+            for d in [0, 1]:
+                dests = edge_index[d][edge_type == r]
+                sources = edge_index[d][edge_type == r]
+                messages = hidden[sources] @ self.rgnc_weights[l][r + self.R * d] + self.rgnc_biases[l][r + self.R * d]
+                yield (messages, dests)
+            # if d > 0:
+                
+            #     # layer_messages.append((messages, dests))
+            #     yield (messages, dests)
+            #     # output[:dests.max().item()+1] += torch_scatter.scatter_sum(messages, dests, dim=0)
+            # else:
+            #     messages = hidden[dests] @ self.rgnc_weights[l][r + self.R] + self.rgnc_biases[l][r + self.R] 
+            #     # layer_messages.append((messages, sources))
+            #     yield (messages, sources)
+            #     # output[:sources.max().item()+1] += torch_scatter.scatter_sum(messages, sources, dim=0)
+
+                        
+                        
     def forward(self, edge_index, edge_type):
+        edge_index = edge_index.to(DEVICE)
+        edge_type = edge_type.to(DEVICE)
         
+        output = self.embeddings
+
+
         for l in range(self.L):
             
-            hidden = self.embeddings
-            output = torch.zeros_like(hidden)
+            hidden = torch.zeros_like(output, device=DEVICE)
+            msg_items = self.get_messages(edge_index, edge_type, l)
+            messages, dests = zip(*msg_items)
             
-
-            for d in [1, -1]:
-                layer_messages = []
-                for r in range(self.R):
-                    dests = edge_index[1][edge_type == r]
-                    sources = edge_index[0][edge_type == r]
-                    if d > 0:
-                        messages = hidden[sources] @ self.rgnc_weights[l][r] + self.rgnc_biases[l][r]
-                        layer_messages.append((messages, dests))
-                    else:
-                        messages = hidden[dests] @ self.rgnc_weights[l][r + self.R] + self.rgnc_biases[l][r + self.R] 
-                        layer_messages.append((messages, sources))
-                        
-                
-                messages, dests =  zip(*layer_messages)
-                messages = torch.vstack(messages)
-                dests = torch.hstack(dests)
-                output += torch_scatter.scatter_sum(messages, dests, dim=0)
+            
+            m = torch.vstack(messages)
+            d = torch.hstack(dests)
+            hidden[:d.max().item()+1] += torch_scatter.scatter_mean(m, d, dim=0)
             if l + 1 < self.L :
                 hidden = self.relu(hidden)
-                
-            hidden = output
-                
-
             
-        return hidden
+            output = hidden           
+
+                    # messages, dests =  zip(*(layer_messages ))
+                    # print(dests.shape)
+                    
+                    # messages = torch.vstack(messages)
+                    # dests = torch.hstack(dests)
+                    # print(len(dests))
+                    # print(len(messages))
+                    
+                    
+                    # print(len(output))
+                    # exit()
+            
+        return output
 
 
 
 class DistMultDecoder(torch.nn.Module):
     def __init__(self, num_relations, hidden_channels):
         super().__init__()
-        self.rel_emb = Parameter(torch.Tensor(num_relations, hidden_channels))
-        self.reset_parameters()
+        self.rel_emb = Parameter(torch.rand(num_relations, hidden_channels, requires_grad=True))
 
-    def reset_parameters(self):
-        torch.nn.init.xavier_uniform_(self.rel_emb)
-
+    def score_objs(self, z, src_idx, rel_idx):
+        z_src, z_dst = z[src_idx], z
+        rel = self.rel_emb[rel_idx]
+        return torch.sum(z_src * rel * z.unsqueeze(1), dim=-1)
+    
     def forward(self, z, edge_index, edge_type):
-        z_src, z_dst = z[edge_index[0]], z[edge_index[1]]
-        rel = self.rel_emb[edge_type]
-        return torch.sum(z_src * rel * z_dst, dim=1)
+        src, dst = edge_index
+        # z_src, z_dst = z[src], z[dst]
+        # rel = self.rel_emb[edge_type]
+        return torch.sum(z[src] * self.rel_emb[edge_type] * z[dst], dim=1)
 
 
 
