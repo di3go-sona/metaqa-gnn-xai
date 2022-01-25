@@ -18,7 +18,7 @@ from torch_geometric.datasets import RelLinkPredDataset
 import torch_scatter
 
 data = RelLinkPredDataset('FB15k-237', 'FB15k-237')[0]
-DEVICE='cpu'
+DEVICE='cuda'
 
 class RGCNEncoder(torch.nn.Module):
     def __init__(self, n_nodes, hidden_channels, n_relations, n_layers=3):
