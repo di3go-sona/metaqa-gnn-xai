@@ -6,19 +6,11 @@ Implements the link prediction task on the FB15k237 datasets according to the
 Caution: This script is executed in a full-batch fashion, and therefore needs
 to run on CPU (following the experimental setup in the official paper).
 """
-import os.path as osp
-from tqdm import tqdm
 
-import torch
-import torch.nn.functional as F
-from torch.nn import Parameter
+import torch, torch_scatter
+from torch.nn import Parameter, ParameterList, ReLU
 
-from torch_geometric.nn import GAE, RGCNConv
-from torch_geometric.datasets import RelLinkPredDataset
-import torch_scatter
-
-data = RelLinkPredDataset('FB15k-237', 'FB15k-237')[0]
-DEVICE='cuda'
+from settings import DEVICE 
 
 class RGCNEncoder(torch.nn.Module):
     def __init__(self, n_nodes, hidden_channels, n_relations, n_layers=3):
@@ -28,10 +20,10 @@ class RGCNEncoder(torch.nn.Module):
         self.E = hidden_channels
         self.L = n_layers
 
-        self.embeddings = torch.nn.Parameter( torch.rand(n_nodes, hidden_channels, requires_grad=True) )
-        self.rgnc_weights = torch.nn.ParameterList( [ torch.nn.Parameter(torch.rand(n_relations*2, hidden_channels, hidden_channels, requires_grad=True)) for _ in range(n_layers) ] )
-        self.rgnc_biases = torch.nn.ParameterList( [ torch.nn.Parameter(torch.rand(n_relations*2, hidden_channels, requires_grad=True)) for _ in range(n_layers) ] )
-        self.relu = torch.nn.ReLU()
+        self.embeddings = Parameter( torch.rand(n_nodes, hidden_channels, requires_grad=True) )
+        self.rgnc_weights = ParameterList( [ Parameter(torch.rand(n_relations*2, hidden_channels, hidden_channels, requires_grad=True)) for _ in range(n_layers) ] )
+        self.rgnc_biases = ParameterList( [ Parameter(torch.rand(n_relations*2, hidden_channels, requires_grad=True)) for _ in range(n_layers) ] )
+        self.relu = ReLU()
 
     def get_messages(self, edge_index, edge_type, l):
         hidden = self.embeddings
