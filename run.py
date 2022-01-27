@@ -121,7 +121,7 @@ class LinkPredictor(pl.LightningModule):
             hits = (ranks[:k]== valid_dst_index).float().mean()  * k
             self.log(f"hit@{k}", hits, on_epoch=True)
         mrr = (1. / ranks.float().mean())
-        self.log(f"mrr", mrr, on_epoch=True)
+        # self.log(f"mrr", mrr, on_epoch=True)
 
         return 
         # print(src, dst, rel)
