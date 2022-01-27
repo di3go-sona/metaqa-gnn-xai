@@ -1,0 +1,9 @@
+#!/bin/sh
+DEVICE=cuda BATCH_SIZE=1024 LAYERS=0 REG=0 python3 run.py
+DEVICE=cuda BATCH_SIZE=1024 LAYERS=0 REG=0.1 python3 run.py
+DEVICE=cuda BATCH_SIZE=1024 LAYERS=0 REG=0.01 python3 run.py
+DEVICE=cuda BATCH_SIZE=1024 LAYERS=0 REG=0.001 python3 run.py
+DEVICE=cuda BATCH_SIZE=-1 LAYERS=1 REG=0 python3 run.py
+DEVICE=cuda BATCH_SIZE=-1 LAYERS=1 REG=0.1 python3 run.py
+DEVICE=cuda BATCH_SIZE=-1 LAYERS=1 REG=0.01 python3 run.py
+DEVICE=cuda BATCH_SIZE=-1 LAYERS=1 REG=0.001 python3 run.py

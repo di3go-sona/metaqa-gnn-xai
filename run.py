@@ -1,8 +1,8 @@
 #%% 
 
+from gc import callbacks
 import torch, torch_geometric, pytorch_lightning as pl
 import wandb
-import os
 
 from pytorch_lightning.trainer.supporters import CombinedLoader
 from pytorch_lightning.loggers import WandbLogger
@@ -10,12 +10,6 @@ from torch.utils.data import DataLoader, TensorDataset
 from rgcn_link_pred import RGCNEncoder, DistMultDecoder
 from tqdm import tqdm 
 from settings import *
-
-
-
-os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"]="1"
-
 
     
 def negative_sampling(edge_index, num_nodes):
@@ -210,7 +204,7 @@ class FB15KData(pl.LightningDataModule):
         
     def train_dataloader(self):
         return DataLoader( self.train_data,  
-                        len(self.train_data) if wandb.config['batch_size'] == 'full' else wandb.config['batch_size'], 
+                        len(self.train_data) if wandb.config['batch_size'] == -1 else wandb.config['batch_size'], 
                         drop_last=True, 
                         shuffle=True)
         # return DataLoader( self.train_data,  len(self.train_data), drop_last=True, shuffle=True)
@@ -241,7 +235,8 @@ if __name__ == '__main__':
                         limit_val_batches = wandb.config['limit_val_batches'],
                         check_val_every_n_epoch = wandb.config['check_val_every_n_epoch'],
                         log_every_n_steps=1, 
-                        max_epochs=wandb.config['epochs'])
+                        max_epochs=wandb.config['epochs'],
+                        callbacks=[checkpoint_callback])
     # train
     trainer.fit(model, data)
 
