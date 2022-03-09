@@ -209,7 +209,7 @@ class EntitiesEmbeddings(pl.LightningModule):
         # self.log('train_prec_neg', neg_prec.item())
 
         
-        return loss + self.reg*self.embeddings.square().sum(0).sqrt().mean()
+        return loss #+ self.reg*self.embeddings.square().sum(0).sqrt().mean()
         # kb_z = self.encode_kb(kb_index.T)
         
     def validation_step(self, batch, batch_idx):
@@ -247,7 +247,7 @@ class EntitiesEmbeddings(pl.LightningModule):
     
     def configure_optimizers(self):
 
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate, weight_decay=self.reg)
         return optimizer
 
 
@@ -304,7 +304,7 @@ class AnswerPredictor(pl.LightningModule):
         prec_pos = (out.sigmoid()[qa_ans == 1]>0.5).float().mean()
         prec_neg = (out.sigmoid()[qa_ans == 0]<0.5).float().mean()
         acc = (prec_neg + prec_pos) / 2
-        loss =  pos_loss + neg_loss  + self.config['reg'] * self.encode_kb.embeddings.pow(2).mean().sqrt()
+        loss =  pos_loss + neg_loss
         
         
         

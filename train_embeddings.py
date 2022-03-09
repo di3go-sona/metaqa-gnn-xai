@@ -71,7 +71,7 @@ if __name__ == '__main__':
         logger= wandb_logger, 
         log_every_n_steps=1,
         check_val_every_n_epoch=5,
-        limit_val_batches=256,
+        limit_val_batches=1024,
         max_epochs=config['epochs'])
     
     trainer.fit(model, data)

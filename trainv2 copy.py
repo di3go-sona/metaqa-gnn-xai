@@ -16,7 +16,7 @@ os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"]="1"
 
 configs = [{
-    "emb_learning_rate": 0.0001,
+    "emb_learning_rate": int(os.environ.get('learning_rate', 0.0001)),
     "emb_epochs": int(os.environ.get('EPOCHS', '300')),
     "emb_batch_size": int(os.environ.get('BATCH_SIZE', '1024')),
     "emb_val_batch_size": int(os.environ.get('BATCH_SIZE', '8')),

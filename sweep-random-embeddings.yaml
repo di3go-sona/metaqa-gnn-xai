@@ -5,23 +5,23 @@ metric:
   name: mrr
 parameters:
   embeddings_size:
-    values: [32, 64, 128, 196, 256, 384]
+    value: 256
   dropout:
     values: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
   regularization:
-    values: [2, 1, 0.1, 0.01, 0.001]
+    values: [1, 0.1, 0.01, 0.001, 0.0001]
   learning_rate:
     values: [0.01, 0.001, 0.0001, 0.00001]
   decoder:
     values: ['DistMultDecoder', 'TransEDecoder']
   epochs:
-    value: 300
+    value: 2000
 
 early_terminate:
   type: hyperband
   s: 2
   eta: 3
-  max_iter: 27
+  max_iter: 100
 
 command:
   - ${env}
