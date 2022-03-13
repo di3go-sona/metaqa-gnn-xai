@@ -219,6 +219,7 @@ class MetaQa(LightningDataModule):
             answers_nodes_ids=[self.kb_nodes_vocab(list(a)) for a in answers_nodes_ids]
             answers_nodes_ids = [ torch.tensor(a) for a in answers_nodes_ids]
             self.answers_nodes_ids[src] = answers_nodes_ids
+        return self
 
         
     def build_kb(self):
