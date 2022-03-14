@@ -26,9 +26,8 @@ class RGCNEncoder(torch.nn.Module):
             yield messages
                         
                         
-    def forward(self, edge_index, edge_type):
-        edge_index = edge_index
-        edge_type = edge_type
+    def forward(self, edge_index, edge_type):        
+        print(edge_index.shape, edge_type.shape)
         
         # print(edge_index.shape, edge_type.shape)
         
@@ -53,7 +52,7 @@ class RGCNEncoder(torch.nn.Module):
                     m = torch.vstack(tuple(messages)).to(hidden.device)
                     d = torch.hstack(tuple(r_dests)).to(hidden.device)
                     
-                    print(l,r,m.shape, d.shape)
+                    # print(l,r,m.shape, d.shape)
                     hidden += torch_scatter.scatter_mean(m, d, dim=0, out=hidden)
 
             if l + 1 < self.n_layers :

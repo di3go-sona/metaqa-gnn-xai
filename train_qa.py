@@ -31,19 +31,22 @@ config = {
     "learning_rate":   float(os.environ.get("learning_rate", 0.0001)),
     "epochs":          int(os.environ.get("epochs", 300)),
     "dropout":         float(os.environ.get("dropout", 0.2)),
-    "regularization":  float(os.environ.get("regularization", 0.1)),
-    "batch_size":      int(os.environ.get("batch_size", -1)),
+    "batch_size":      int(os.environ.get("batch_size", 2048)),
     "decoder":         str(os.environ.get("decoder", 'DistMultDecoder')),
-    "n_layers":        int(os.environ.get("n_layers", 2)),
+    "n_layers":        int(os.environ.get("n_layers", 1)),
     "reg":        int(os.environ.get("reg", 0.1)),
-    'device': 'cpu'
+    'device': 'cuda'
 }
     
 
 if __name__ == '__main__':
     
-    data  = MetaQa.build_or_get(config['batch_size'])
-    model = QaModel(data.kb_n_nodes, data.kb_n_relations, data.qa_questions_vocab, config, embeddings)
+    data  = MetaQa(1, config['batch_size'])
+    model = QaModel(data.nodes_dataset.kb_n_nodes, 
+        data.nodes_dataset.kb_n_relations, 
+        data.qa_questions_datasets.qa_questions_vocab, 
+        config, 
+        embeddings)
 
         
     # Initialize data and model for pre-training

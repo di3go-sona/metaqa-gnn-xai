@@ -44,11 +44,14 @@ class QaModel(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         kb,  ( qa_questions , qa_nodes) =  batch
         qa_root_nodes, qa_ans_nodes, qa_ans = qa_nodes.T
-        kb_index, kb_type = kb
-
-        kb_z = self.encode_kb(kb_index.T, kb_type)
-        qa_question_z = self.encode_question(qa_questions)
+        kb_src, kb_dest, kb_type = kb.T
         
+        qa_ans = qa_ans.float()
+        
+        
+
+        kb_z = self.encode_kb(torch.vstack([kb_src, kb_dest]), kb_type)
+        qa_question_z = self.encode_question(qa_questions)
         qa_answers_emb = kb_z[qa_ans_nodes.long()]
         root_emb = kb_z[qa_root_nodes.long()]
         qa_question_emb = qa_question_z.squeeze()
@@ -56,13 +59,13 @@ class QaModel(pl.LightningModule):
         out = self.decode( qa_answers_emb, qa_question_emb, root_emb).squeeze()
 
 
+        print(qa_ans.dtype, out.dtype)
         pos_loss = self.loss(out[qa_ans == 1], qa_ans[qa_ans == 1])
         neg_loss = self.loss(out[qa_ans == 0], qa_ans[qa_ans == 0])
         prec_pos = (out.sigmoid()[qa_ans == 1]>0.5).float().mean()
         prec_neg = (out.sigmoid()[qa_ans == 0]<0.5).float().mean()
         acc = (prec_neg + prec_pos) / 2
-        loss =  pos_loss + neg_loss
-        
+        loss =  pos_loss  + neg_loss 
         
         
         self.log('train_acc', acc.item())
@@ -77,9 +80,13 @@ class QaModel(pl.LightningModule):
 
         kb,  ( qa_questions , qa_nodes) =  batch
         qa_root_nodes, qa_ans_nodes, qa_ans = qa_nodes.T
-        kb_index, kb_type = kb
+        kb_src, kb_dest, kb_type = kb.T
+        
+        qa_ans = qa_ans.float()
+        
+        
 
-        kb_z = self.encode_kb(kb_index.T, kb_type)
+        kb_z = self.encode_kb(torch.vstack([kb_src, kb_dest]), kb_type)
         qa_question_z = self.encode_question(qa_questions)
         qa_answers_emb = kb_z[qa_ans_nodes.long()]
         root_emb = kb_z[qa_root_nodes.long()]
@@ -88,13 +95,13 @@ class QaModel(pl.LightningModule):
         out = self.decode( qa_answers_emb, qa_question_emb, root_emb).squeeze()
 
 
-
+        print(qa_ans.dtype, out.dtype)
         pos_loss = self.loss(out[qa_ans == 1], qa_ans[qa_ans == 1])
         neg_loss = self.loss(out[qa_ans == 0], qa_ans[qa_ans == 0])
         prec_pos = (out.sigmoid()[qa_ans == 1]>0.5).float().mean()
         prec_neg = (out.sigmoid()[qa_ans == 0]<0.5).float().mean()
         acc = (prec_neg + prec_pos) / 2
-        loss =  pos_loss  + neg_loss   + self.reg * self.encode_kb.embeddings.pow(2).mean().sqrt()
+        loss =  pos_loss  + neg_loss   + self.reg
         
         
         
