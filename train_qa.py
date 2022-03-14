@@ -34,7 +34,7 @@ config = {
     "batch_size":      int(os.environ.get("batch_size", 2048)),
     "decoder":         str(os.environ.get("decoder", 'DistMultDecoder')),
     "n_layers":        int(os.environ.get("n_layers", 1)),
-    "reg":        int(os.environ.get("reg", 0.1)),
+    "reg":        int(os.environ.get("reg", 0.001)),
     'device': 'cuda'
 }
     
