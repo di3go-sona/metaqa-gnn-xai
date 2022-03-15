@@ -31,7 +31,7 @@ config = {
     "learning_rate":   float(os.environ.get("learning_rate", 0.0001)),
     "epochs":          int(os.environ.get("epochs", 1000)),
     "dropout":         float(os.environ.get("dropout", 0.2)),
-    "batch_size":      int(os.environ.get("batch_size", 1500)),
+    "batch_size":      int(os.environ.get("batch_size", 2048)),
     "decoder":         str(os.environ.get("decoder", 'DistMultDecoder')),
     "n_layers":        int(os.environ.get("n_layers", 1)),
     "reg":        int(os.environ.get("reg", 0.1)),
