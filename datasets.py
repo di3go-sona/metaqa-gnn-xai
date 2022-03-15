@@ -56,7 +56,7 @@ class QaQuestionsDataset(Dataset):
                 
             nodes = list(set(next+nodes))      
 
-        neg_answers = [ a for a in  nodes if a not in pos_answers]
+        neg_answers = [ a for a in  nodes if a not in  torch.hstack([pos_answers, root])]
         negatives = min( len(neg_answers), self.max_pos*self.neg_ratio )
         positives = min( len(pos_answers), self.max_pos)
 

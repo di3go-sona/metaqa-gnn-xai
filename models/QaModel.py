@@ -42,7 +42,7 @@ class QaModel(pl.LightningModule):
 
     def configure_optimizers(self):
         
-        no_decay = ["biases", "LayerNorm"]
+        no_decay = ["bias", "norm.weight"]
         optimizer_grouped_parameters = [
             {
                 "params": [
@@ -61,7 +61,7 @@ class QaModel(pl.LightningModule):
                 "weight_decay": 0.0,
             },
         ]
-        print(list(self.named_parameters()))
+        # print(list(self.named_parameters()))
         # optimizer = torch.optim.AdamW(
         #     optimizer_grouped_parameters,
         #     lr=lr,
