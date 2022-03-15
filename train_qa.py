@@ -38,7 +38,7 @@ config = {
     "decoder":         str(os.environ.get("decoder", 'DistMultDecoder')),
     "n_layers":        int(os.environ.get("n_layers", 1)),
     "reg":             float(os.environ.get("reg", 0.01)),
-    "hops":            int(os.environ.get("hops", 1)),
+    "hops":            int(os.environ.get("hops", 2)),
     'device': 'cuda'
 }
     
@@ -55,7 +55,7 @@ if __name__ == '__main__':
         
     # Initialize data and model for pre-training
     
-    wandb.init( project="metaqa", reinit=True)
+    wandb.init( project="metaqa",entity='link-prediction-gnn',reinit=True)
     wandb_logger = WandbLogger(log_model=True)
     
     wandb_logger.watch(model, log="all", log_freq=20)
