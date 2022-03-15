@@ -42,7 +42,7 @@ class QaModel(pl.LightningModule):
 
     def configure_optimizers(self):
         
-        no_decay = ["biases"]
+        no_decay = ["biases", "LayerNorm"]
         optimizer_grouped_parameters = [
             {
                 "params": [

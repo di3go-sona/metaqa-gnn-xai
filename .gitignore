@@ -4,4 +4,4 @@ checkpoints/
 venv/
 __pycache__/
 *.cache
-EmbeddingsModel|DistMultDecoder|embeddings_size=256|learning_rate=0.0001|dropout=0.3|reg=0.1|epoch=249|hit@10=0.1044921875.ckpt
+# heckpoints/embeddings/EmbeddingsModel|DistMultDecoder|embeddings_size=256|learning_rate=0.0001|dropout=0.3|reg=0.1|epoch=249|hit@10=0.1044921875.ckpt 

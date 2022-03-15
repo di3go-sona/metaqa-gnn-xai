@@ -240,18 +240,19 @@ class MetaQaEmbeddings(LightningDataModule):
         
 class MetaQa(LightningDataModule):
     path = 'data/MetaQa.cache'
-    def __init__(self, hops, batch_size, max_answers=1, max_question_toks=32,  strip_root=True):
+    def __init__(self, hops, batch_size, max_pos=1, neg_ratio=10, max_question_toks=32,  strip_root=True):
         super().__init__()
         self.qa_data = {}
 
         self.hops = hops
-        self.max_answers = max_answers
+        self.max_pos = max_pos
+        self.neg_ratio = neg_ratio
         self.max_question_toks = max_question_toks
         self.strip_root = strip_root
         self.batch_size = batch_size
         
         self.nodes_dataset = NodesDataset()
-        self.qa_questions_datasets = QaQuestionsDatasetsProvider(self.nodes_dataset.kb, self.nodes_dataset.kb_nodes_vocab, 1, False, 2, 10, True)
+        self.qa_questions_datasets = QaQuestionsDatasetsProvider(self.nodes_dataset.kb, self.nodes_dataset.kb_nodes_vocab, self.hops, False, self.max_pos, self.neg_ratio, True)
         
         
         # self.build_datasets()
