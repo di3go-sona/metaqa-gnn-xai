@@ -3,7 +3,7 @@ from torch.nn import ParameterList, ReLU, Parameter
 
 
 class RGCNEncoder(torch.nn.Module):
-    def __init__(self, embeddings, n_relations, configs, freeze_embeddings=False):
+    def __init__(self, embeddings, n_relations, configs, freeze_embeddings=True):
         super().__init__()
         self.n_relations = n_relations
         self.n_nodes, self.embeddings_size = embeddings.shape
@@ -19,6 +19,7 @@ class RGCNEncoder(torch.nn.Module):
         self.rgcn_biases = ParameterList( [ Parameter(torch.rand(self.n_relations * 2 + 1, 
                                                                     self.embeddings_size, requires_grad=True)) for _ in range(self.n_layers) ] )
         self.relu = ReLU()
+        self.norm = torch.nn.LayerNorm(self.embeddings_size)
 
     def get_messages(self, embeddings_source, index_source, l, inverse=False):
         for r in range(self.n_relations):
@@ -27,7 +28,7 @@ class RGCNEncoder(torch.nn.Module):
                         
                         
     def forward(self, edge_index, edge_type):        
-        print(edge_index.shape, edge_type.shape)
+        # print(edge_index.shape, edge_type.shape)
         
         # print(edge_index.shape, edge_type.shape)
         
@@ -54,11 +55,13 @@ class RGCNEncoder(torch.nn.Module):
                     
                     # print(l,r,m.shape, d.shape)
                     hidden += torch_scatter.scatter_mean(m, d, dim=0, out=hidden)
-
+            
+             
             if l + 1 < self.n_layers :
                 hidden = self.relu(hidden)
                 hidden = self.dropout(hidden)
-            output = hidden
+            hidden = self.norm(hidden)
+            output = hidden 
             
         
         return output

@@ -11,12 +11,15 @@ class QaModel(pl.LightningModule):
         self.n_nodes = n_nodes
         self.n_relations = n_relations
         self.questions_vocab_size = questions_vocab_size
+        
         self.n_layers = config['n_layers']
         self.reg = config['reg']
         self.p_dropout = config['dropout']
         self.learning_rate = config['learning_rate']
+        
         self.encode_kb = RGCNEncoder(embeddings, self.n_relations, config,  )
         self.encode_question = LSTMEncoder(len(self.questions_vocab_size), 32, embeddings.shape[1], stack='short-term')
+        
         self.linear1 =  Linear(embeddings.shape[1]*3,embeddings.shape[1])
         self.linear2 =  Linear(embeddings.shape[1], 1)
         self.relu = ReLU()
@@ -38,7 +41,34 @@ class QaModel(pl.LightningModule):
         return f"{self.__class__.__name__}|{params_string}"
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam([v for k,v in self.named_parameters() if k not in ['encode_kb.embeddings.embeddings', 'encode_kb.embeddings']], lr=self.learning_rate)
+        
+        no_decay = ["biases"]
+        optimizer_grouped_parameters = [
+            {
+                "params": [
+                    p
+                    for n, p in self.named_parameters()
+                    if not any(nd in n for nd in no_decay)
+                ],
+                "weight_decay": self.reg,
+            },
+            {
+                "params": [
+                    p
+                    for n, p in self.named_parameters()
+                    if any(nd in n for nd in no_decay)
+                ],
+                "weight_decay": 0.0,
+            },
+        ]
+        print(list(self.named_parameters()))
+        # optimizer = torch.optim.AdamW(
+        #     optimizer_grouped_parameters,
+        #     lr=lr,
+        #     weight_decay=weight_decay,
+        # )
+        
+        optimizer = torch.optim.Adam(optimizer_grouped_parameters, lr=self.learning_rate, weight_decay=self.reg)
         return optimizer
 
     def training_step(self, batch, batch_idx):
@@ -59,7 +89,7 @@ class QaModel(pl.LightningModule):
         out = self.decode( qa_answers_emb, qa_question_emb, root_emb).squeeze()
 
 
-        print(qa_ans.dtype, out.dtype)
+        # print(qa_ans.dtype, out.dtype)
         pos_loss = self.loss(out[qa_ans == 1], qa_ans[qa_ans == 1])
         neg_loss = self.loss(out[qa_ans == 0], qa_ans[qa_ans == 0])
         prec_pos = (out.sigmoid()[qa_ans == 1]>0.5).float().mean()
@@ -95,13 +125,13 @@ class QaModel(pl.LightningModule):
         out = self.decode( qa_answers_emb, qa_question_emb, root_emb).squeeze()
 
 
-        print(qa_ans.dtype, out.dtype)
+        # print(qa_ans.dtype, out.dtype)
         pos_loss = self.loss(out[qa_ans == 1], qa_ans[qa_ans == 1])
         neg_loss = self.loss(out[qa_ans == 0], qa_ans[qa_ans == 0])
         prec_pos = (out.sigmoid()[qa_ans == 1]>0.5).float().mean()
         prec_neg = (out.sigmoid()[qa_ans == 0]<0.5).float().mean()
         acc = (prec_neg + prec_pos) / 2
-        loss =  pos_loss  + neg_loss   + self.reg
+        loss =  pos_loss  + neg_loss  
         
         
         

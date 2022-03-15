@@ -29,19 +29,19 @@ os.environ["CUDA_VISIBLE_DEVICES"]="1"
 
 config = {
     "learning_rate":   float(os.environ.get("learning_rate", 0.0001)),
-    "epochs":          int(os.environ.get("epochs", 300)),
+    "epochs":          int(os.environ.get("epochs", 1000)),
     "dropout":         float(os.environ.get("dropout", 0.2)),
-    "batch_size":      int(os.environ.get("batch_size", 2048)),
+    "batch_size":      int(os.environ.get("batch_size", 1500)),
     "decoder":         str(os.environ.get("decoder", 'DistMultDecoder')),
     "n_layers":        int(os.environ.get("n_layers", 1)),
-    "reg":        int(os.environ.get("reg", 0.001)),
+    "reg":        int(os.environ.get("reg", 0.1)),
     'device': 'cuda'
 }
     
 
 if __name__ == '__main__':
     
-    data  = MetaQa(1, config['batch_size'])
+    data  = MetaQa(2, config['batch_size'])
     model = QaModel(data.nodes_dataset.kb_n_nodes, 
         data.nodes_dataset.kb_n_relations, 
         data.qa_questions_datasets.qa_questions_vocab, 
@@ -54,9 +54,9 @@ if __name__ == '__main__':
     wandb.init( project="metaqa", reinit=True)
     wandb_logger = WandbLogger(log_model=True)
     
-                
+    wandb_logger.watch(model, log="all", log_freq=1)
     embeddings_checkpoint_callback = ModelCheckpoint(
-        dirpath='checkpoints/embeddings/',
+        dirpath='checkpoints/qa/',
         filename=f'{model.cname()}'+'|{epoch}|{hit@10}'  
         )  
     
