@@ -27,8 +27,8 @@ if embeddings_model == 'auto' or embeddings_model is None :
 
 # if embeddings_model == 'auto' or embeddings_model is None :
 
-os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"]="1"
+if "CUDA_DEVICE_ORDER" not in os.environ: os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
+if "CUDA_VISIBLE_DEVICES" not in os.environ: os.environ["CUDA_VISIBLE_DEVICES"]="1"
 
 config = {
     "learning_rate":   float(os.environ.get("learning_rate", 0.0001)),
