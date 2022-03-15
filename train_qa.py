@@ -54,7 +54,7 @@ if __name__ == '__main__':
     wandb.init( project="metaqa", reinit=True)
     wandb_logger = WandbLogger(log_model=True)
     
-    wandb_logger.watch(model, log="all", log_freq=1)
+    wandb_logger.watch(model, log="all", log_freq=50)
     embeddings_checkpoint_callback = ModelCheckpoint(
         dirpath='checkpoints/qa/',
         filename=f'{model.cname()}'+'|{epoch}|{hit@10}'  
