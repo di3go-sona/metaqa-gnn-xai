@@ -1,149 +1,217 @@
+#%%
+import os, glob, re
+from textwrap import indent
 import torch, pytorch_lightning as pl 
-
+from pytorch_metric_learning import losses, miners, distances
 from torch.nn import Linear, ReLU
-from models.LSTMEncoder import LSTMEncoder
-from models.RGCNEncoder import RGCNEncoder
-from models.EmbeddingsDecoders import *
+from tqdm import tqdm
+from dataset.dataloaders import QuestionAnsweringData, KB_Dataset
+from models.QuestionEncoder import QuestionEncoder
+from models.EmbeddingsModel import EmbeddingsModel
+from models.GraphEncoder import GraphEncoder
+
+from torch_geometric.nn.conv import RGCNConv, FastRGCNConv
+
+
+torch.autograd.set_detect_anomaly(True)
+
+
+def load_graph_encoder():
+    embeddings_models = glob.glob('./checkpoints/embeddings/**')
+    embeddings_models_scores = [re.search("mrr=([0-9].[0-9]*)", m).group(1) for m in embeddings_models]
+    embeddings_models = list(sorted(zip(embeddings_models_scores,embeddings_models )))
+    _, path = (embeddings_models[0])
+    embeddings_model = EmbeddingsModel.load_from_checkpoint(path)
+    return embeddings_model.encoder
+
+
 
 class QaModel(pl.LightningModule):
-    def __init__(self, n_nodes: int, n_relations: int, questions_vocab_size:int, config: dict, embeddings = None) -> None:
+    def __init__(self, graph_encoder: GraphEncoder, question_encoder: QuestionEncoder, graph_index: torch.Tensor,  configs: dict) -> None:
         super().__init__()
-        self.n_nodes = n_nodes
-        self.n_relations = n_relations
-        self.questions_vocab_size = questions_vocab_size
         
-        self.n_layers = config['n_layers']
-        self.reg = config['reg']
-        self.p_dropout = config['dropout']
-        self.learning_rate = config['learning_rate']
+        self.graph_encoder = graph_encoder
+        self.question_encoder = question_encoder
+        self.graph_embeddings = graph_encoder.nodes_embeddings(torch.arange(self.graph_encoder.n_nodes))
+        self.configs = configs 
         
-        self.encode_kb = RGCNEncoder(embeddings, self.n_relations, config,  )
-        self.encode_question = LSTMEncoder(len(self.questions_vocab_size), 32, embeddings.shape[1], stack='short-term')
+        self._graph_index = graph_index.to(self.configs['device'])
         
-        self.linear1 =  Linear(embeddings.shape[1]*3,embeddings.shape[1])
-        self.linear2 =  Linear(embeddings.shape[1], 1)
-        self.relu = ReLU()
-        self.loss = torch.nn.BCEWithLogitsLoss()
-        
-        
-        self.decode_question =torch.nn.Sequential(
-            self.linear1,
-            self.relu,
-            self.linear2            
+        self.rgcn_layers = torch.nn.ModuleList(
+            [ RGCNConv(self.emb_size, self.emb_size, self.graph_encoder.n_relations, )   for l in range(self.configs['n_layers'])]
         )
-        
+            
+        self.score_candidate = Linear(self.emb_size, 1)
 
         self.save_hyperparameters()
-        
-    def cname(self):
+
+    @property
+    def graph_index(self):
+        return (self._graph_index[:2],self._graph_index[2])
+    
+    @property
+    def emb_size(self):
+        return self.graph_embeddings.shape[1]
+    
+    def get_name(self):
         params = ['learning_rate', 'p_dropout', 'reg', 'n_layers']
         params_string = '|'.join([f"{p}={getattr(self, p)}" for p in params])
         return f"{self.__class__.__name__}|{params_string}"
-
+    
+    
     def configure_optimizers(self):
         
-        no_decay = ["bias", "norm.weight"]
-        optimizer_grouped_parameters = [
-            {
-                "params": [
-                    p
-                    for n, p in self.named_parameters()
-                    if not any(nd in n for nd in no_decay)
-                ],
-                "weight_decay": self.reg,
-            },
-            {
-                "params": [
-                    p
-                    for n, p in self.named_parameters()
-                    if any(nd in n for nd in no_decay)
-                ],
-                "weight_decay": 0.0,
-            },
-        ]
-        # print(list(self.named_parameters()))
-        # optimizer = torch.optim.AdamW(
-        #     optimizer_grouped_parameters,
-        #     lr=lr,
-        #     weight_decay=weight_decay,
-        # )
+        no_decay = ["bias", "norm.weight",]
+        freeze = [ "question_encoder.model",]# 'graph_encoder']
+        params = []
+        for n,p in self.named_parameters():
+            if any([stopword in n for stopword in freeze]):
+                print(f'freeze: {n}')
+            elif any([stopword in n for stopword in no_decay]):
+                print(f'train_no_reg: {n}')
+                params.append({
+                    "params": p,
+                    "weight_decay": 0,
+                })
+            else:
+                print(f'train: {n}')
+                params.append({
+                    "params": p,
+                    "weight_decay": self.configs['l2'],
+                })
         
-        optimizer = torch.optim.Adam(optimizer_grouped_parameters, lr=self.learning_rate, weight_decay=self.reg)
+        optimizer = torch.optim.Adam(
+            params, 
+            lr=self.configs['lr'], 
+            weight_decay=self.configs['l2'])
+        
         return optimizer
 
     def training_step(self, batch, batch_idx):
-        kb,  ( qa_questions , qa_nodes) =  batch
-        qa_root_nodes, qa_ans_nodes, qa_ans = qa_nodes.T
-        kb_src, kb_dest, kb_type = kb.T
-        
-        qa_ans = qa_ans.float()
-        
-        
-
-        kb_z = self.encode_kb(torch.vstack([kb_src, kb_dest]), kb_type)
-        qa_question_z = self.encode_question(qa_questions)
-        qa_answers_emb = kb_z[qa_ans_nodes.long()]
-        root_emb = kb_z[qa_root_nodes.long()]
-        qa_question_emb = qa_question_z.squeeze()
-
-        out = self.decode( qa_answers_emb, qa_question_emb, root_emb).squeeze()
+        torch.cuda.empty_cache()
+        questions, roots, answers_mask, hops =  batch
+        questions_emb = self.question_encoder(list(questions))
+        answers_emb = self.graph_encoder.nodes_embeddings(torch.arange(self.graph_encoder.n_nodes,  device=self.device, requires_grad=False))
+        batch_size = len(questions_emb)
+        n_nodes = self.graph_encoder.n_nodes
 
 
-        # print(qa_ans.dtype, out.dtype)
-        pos_loss = self.loss(out[qa_ans == 1], qa_ans[qa_ans == 1])
-        neg_loss = self.loss(out[qa_ans == 0], qa_ans[qa_ans == 0])
-        prec_pos = (out.sigmoid()[qa_ans == 1]>0.5).float().mean()
-        prec_neg = (out.sigmoid()[qa_ans == 0]<0.5).float().mean()
-        acc = (prec_neg + prec_pos) / 2
-        loss =  pos_loss  + neg_loss 
+        # Encode Answers 
+        _Z = []
+        for i, (q_emb, r) in enumerate(zip(questions_emb, roots)):
+            answers_emb_hat = answers_emb + ((torch.arange(n_nodes, device ='cuda', requires_grad=False) == r).unsqueeze(-1)  * q_emb)
+            
+            z = None
+            for  i, rgcn in enumerate(self.rgcn_layers):
+                z = answers_emb_hat if z is None else z
+                z = rgcn(answers_emb_hat, *self.graph_index )
+                if i < self.configs['n_layers']:
+                    z = torch.nn.ReLU()(z)
+            
+            _Z.append(z)
+
+        Z = torch.vstack(_Z)
+
+        # Decode ( score ) Answers 
+        scores = self.score_candidate(Z).view(batch_size, -1)
+         
+        # Compute weights for the loss
+        w_pos =  1/answers_mask.sum()
+        w_neg = 1/(~answers_mask).sum()
+        weights = torch.zeros_like(answers_mask, dtype=torch.float, requires_grad=False)
+        weights[answers_mask == 1] = w_pos
+        weights[answers_mask == 0] = w_neg
         
+        # Compute and log loss 
+        loss = torch.nn.BCEWithLogitsLoss(weights) ( scores, answers_mask.float(), )#.detach()
+        self.log('train/loss', loss )
         
-        self.log('train_acc', acc.item())
-        self.log('train_loss', loss.item())
-        self.log('train_prec_pos', prec_pos.item())
-        self.log('train_prec_neg', prec_neg.item())
+        # Compute and log prec 
+        prec_pos = (scores[answers_mask == 0] < 0.5).sum() / (answers_mask == 0).sum()
+        prec_neg = (scores[answers_mask == 1] >= 0.5).sum() / (answers_mask == 1).sum()
+        prec = (prec_pos + prec_neg)/2
+        
+        self.log('train/prec', prec)
+        self.log('train/prec_pos', prec_pos)
+        self.log('train/prec_neg', prec_neg)
+        
+        # Compute and log hits 
+        indices = scores.argsort(1, descending=True)
+        
+        hits = {1:0, 10:0, 100:0, 1000:0}
+        for i,a in zip(indices, answers_mask):
+            candidate_hits = i[a.bool()]
+            for h,v in hits.items():
+                
+                hits[h] = v + (len([c for c in candidate_hits if c < h]) / min(len(candidate_hits), h)) / batch_size
+        
+        self.log('train/loss', loss )
+        for h,v in hits.items():
+            self.log(f'train/hits@{h}', v)
 
         return loss
-
-        
+    
     def validation_step(self, batch, batch_idx):
 
-        kb,  ( qa_questions , qa_nodes) =  batch
-        qa_root_nodes, qa_ans_nodes, qa_ans = qa_nodes.T
-        kb_src, kb_dest, kb_type = kb.T
+        questions, roots, answers_mask, hops =  batch
+        questions_emb = self.question_encoder(list(questions))
+        answers_emb = self.graph_encoder.nodes_embeddings(torch.arange(self.graph_encoder.n_nodes,  device=self.device, requires_grad=False))
+        batch_size = len(questions_emb)
+        n_nodes = self.graph_encoder.n_nodes
+
+
+        # Encode Answers 
+        _Z = []
+        for i, (q_emb, r) in enumerate(zip(questions_emb, roots)):
+            answers_emb_hat = answers_emb + ((torch.arange(n_nodes, device ='cuda', requires_grad=False) == r).unsqueeze(-1)  * q_emb)
+            
+            z = None
+            for  i, rgcn in enumerate(self.rgcn_layers):
+                z = answers_emb_hat if z is None else z
+                z = rgcn(answers_emb_hat, *self.graph_index )
+                if i < self.configs['n_layers']:
+                    z = torch.nn.ReLU()(z)
+            
+            _Z.append(z)
+
+        Z = torch.vstack(_Z)
+
+        # Decode ( score ) Answers 
+        scores = self.score_candidate(Z).view(batch_size, -1)
+         
+        # Compute weights for the loss
+        w_pos =  1/answers_mask.sum()
+        w_neg = 1/(~answers_mask).sum()
+        weights = torch.zeros_like(answers_mask, dtype=torch.float, requires_grad=False)
+        weights[answers_mask == 1] = w_pos
+        weights[answers_mask == 0] = w_neg
         
-        qa_ans = qa_ans.float()
+        # Compute and log loss 
+        loss = torch.nn.BCEWithLogitsLoss(weights) ( scores, answers_mask.float(), )#.detach()
+        self.log('val/loss', loss )
         
+        # Compute and log prec 
+        prec_pos = (scores[answers_mask == 0] < 0.5).sum() / (answers_mask == 0).sum()
+        prec_neg = (scores[answers_mask == 1] >= 0.5).sum() / (answers_mask == 1).sum()
+        prec = (prec_pos + prec_neg)/2
         
-
-        kb_z = self.encode_kb(torch.vstack([kb_src, kb_dest]), kb_type)
-        qa_question_z = self.encode_question(qa_questions)
-        qa_answers_emb = kb_z[qa_ans_nodes.long()]
-        root_emb = kb_z[qa_root_nodes.long()]
-        qa_question_emb = qa_question_z.squeeze()
-
-        out = self.decode( qa_answers_emb, qa_question_emb, root_emb).squeeze()
-
-
-        # print(qa_ans.dtype, out.dtype)
-        pos_loss = self.loss(out[qa_ans == 1], qa_ans[qa_ans == 1])
-        neg_loss = self.loss(out[qa_ans == 0], qa_ans[qa_ans == 0])
-        prec_pos = (out.sigmoid()[qa_ans == 1]>0.5).float().mean()
-        prec_neg = (out.sigmoid()[qa_ans == 0]<0.5).float().mean()
-        acc = (prec_neg + prec_pos) / 2
-        loss =  pos_loss  + neg_loss  
+        self.log('val/prec', prec)
+        self.log('val/prec_pos', prec_pos)
+        self.log('val/prec_neg', prec_neg)
         
+        # Compute and log hits 
+        indices = scores.argsort(1, descending=True)
         
+        hits = {1:0, 10:0, 100:0, 1000:0}
+        for i,a in zip(indices, answers_mask):
+            candidate_hits = i[a.bool()]
+            for h,v in hits.items():
+                
+                hits[h] = v + (len([c for c in candidate_hits if c < h]) / min(len(candidate_hits), h)) / batch_size
         
-        self.log('val_acc', acc.item())
-        self.log('val_loss', loss.item())
-        self.log('val_prec_pos', prec_pos.item())
-        self.log('val_prec_neg', prec_neg.item())
-        return None
+        self.log('val/loss', loss )
+        for h,v in hits.items():
+            self.log(f'val/hits@{h}', v)
 
-    def decode(self, qa_answers_emb, question_emb, root_emb):
-
-        stacked_input = torch.cat((qa_answers_emb, question_emb, root_emb),dim=1)
-        return self.decode_question(stacked_input)
-
-
+        return loss
+# %%

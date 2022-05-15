@@ -45,18 +45,43 @@ class QaQuestionsDataset(Dataset):
         root = self.roots[item]
         pos_answers = self.answers[item]
         # root_name = root.item()
-        nodes = [root.item()]
+        nodes = { 0: [root.item()] }
         # print(nodes, self.kb.nodes())
-        for _ in range(self.hops):
-
+        for l in range(3):
+            hits = 0
             next = []
-            for n in nodes:
-                next += list( self.kb.neighbors(n)) 
-                next += list( nx.reverse_view(self.kb).neighbors(n))
+            current_nodes = nodes[l]
+            
+            random.shuffle(current_nodes)
+
+            
+            for n in current_nodes:
+                nodes_in = list( self.kb.neighbors(n))
+                nodes_out = list(nx.reverse_view(self.kb).neighbors(n))
+                _next = list(set(nodes_in + nodes_out ))
                 
-            nodes = list(set(next+nodes))      
+                
+                
+                if len(_next) > 0:
+                    hits += 1
+                    # random.shuffle(_next)
+                    # _next = _next[:self.neg_ratio]
+                next.extend(_next)
+                if hits >= 3:
+                    break
+                
+            nodes[l+1] = next
+                
+                
+                # print(next)
+                # next += random.choices(list(set(list( self.kb.neighbors(n)) + list( nx.reverse_view(self.kb).neighbors(n)))), k=self.neg_ratio)
+
+            
+        # pprint(nodes)
+        nodes = nodes[1] + nodes[2] + nodes[3]
 
         neg_answers = [ a for a in  nodes if a not in  torch.hstack([pos_answers, root])]
+        
         negatives = min( len(neg_answers), self.max_pos*self.neg_ratio )
         positives = min( len(pos_answers), self.max_pos)
 
@@ -159,21 +184,14 @@ class QaQuestionsDatasetsProvider():
             self.answers_nodes_ids[src] = answers_nodes_ids
         return self
         
-
-
-        
-
-    
-
-
 class NodesDataset(Dataset):
-    def __init__(self, ) -> None:
+    def __init__(self, path='data/kb.txt') -> None:
+        self.path=path
         self.build_kb()
 
-
-    def build_kb(self):
+    def build_kb(self, ):
         # Load Knowledgebase Graph
-        with open('data/kb.txt') as fin:
+        with open(self.path) as fin:
             l = fin.read().lower().strip().split('\n')
             kb = nx.classes.DiGraph()
             
@@ -214,16 +232,6 @@ class NodesDataset(Dataset):
 
     def __len__(self):
         return len(self.kb_edge_type)
-
-
-
-
-
-
-
-
-
-
 
 class MetaQaEmbeddings(LightningDataModule):
     def __init__(self, batch_size=128, val_batch_size=None):
@@ -274,7 +282,7 @@ class MetaQa(LightningDataModule):
     def train_dataloader(self):
         return CombinedLoader([
             DataLoader(self.nodes_dataset, batch_size=len(self.nodes_dataset)),
-            DataLoader(self.qa_questions_datasets.get_dataset('train'), batch_size=self.batch_size or len(self.qa_questions_datasets.get_dataset('train')) , shuffle=True, num_workers=8, collate_fn=pad_collate),
+            DataLoader(self.qa_questions_datasets.get_dataset('train'), batch_size=self.batch_size or len(self.qa_questions_datasets.get_dataset('train')) ,prefetch_factor=4, shuffle=True, num_workers=8, collate_fn=pad_collate),
             # DataLoader( self.train_qa_question_dataset, batch_size=self.batch_size, ),
              ], 'max_size_cycle')
 
@@ -283,24 +291,13 @@ class MetaQa(LightningDataModule):
         
         return CombinedLoader([ 
             DataLoader(self.nodes_dataset, batch_size=len(self.nodes_dataset)),
-            DataLoader(self.qa_questions_datasets.get_dataset('test'), batch_size=self.batch_size or len(self.qa_questions_datasets.get_dataset('test')) , shuffle=False,num_workers=8, collate_fn=pad_collate),           
+            DataLoader(self.qa_questions_datasets.get_dataset('test'), batch_size=self.batch_size or len(self.qa_questions_datasets.get_dataset('test')) ,prefetch_factor=4, shuffle=False,num_workers=8, collate_fn=pad_collate),           
             # DataLoader(self.test_qa_question_dataset, batch_size=self.batch_size, collate_fn=pad_collate),
              ], 'max_size_cycle')
 
 
     def test_dataloader(self):
         return self.val_dataloader()
-    
-
-    # @staticmethod
-    # def build_or_get(batch_size):
-    #     if os.path.exists(MetaQa.path):
-    #         with open(MetaQa.path, 'rb') as fin:
-    #             metaqa:MetaQa =  pickle.load( fin)
-    #             metaqa.batch_size = batch_size
-    #             return metaqa
-    #     return MetaQa(batch_size)
-        
 
 if __name__ == '__main__':
     nodes_dataset = NodesDataset()
