@@ -15,13 +15,13 @@ if "CUDA_DEVICE_ORDER" not in os.environ: os.environ["CUDA_DEVICE_ORDER"] = "PCI
 if "CUDA_VISIBLE_DEVICES" not in os.environ: os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 configs = {
-    "lr":              float(os.environ.get("lr", 0.00001)),
+    "lr":              float(os.environ.get("lr", 0.0001)),
     "epochs":          int(os.environ.get("epochs", 15)),
     # "dropout":         float(os.environ.get("dropout", 0.2)),
-    "val_batch_size":      int(os.environ.get("batch_size", 24)),
-    "batch_size":      int(os.environ.get("batch_size", 8)),
+    "val_batch_size":  int(os.environ.get("batch_size", 24)),
+    "batch_size":      int(os.environ.get("batch_size", 24)),
     "n_layers":        int(os.environ.get("n_layers", 1)),
-    "l2":              float(os.environ.get("reg", 0.001)),
+    "l2":              float(os.environ.get("reg", 0.01)),
     "hops":            os.environ.get("hops", [1]),
     'device':          'cuda'
 }
@@ -44,10 +44,9 @@ logger = WandbLogger(log_model=True, entity='link-prediction-gnn', project='meta
 trainer = pl.Trainer( 
         ** {'gpus':1, 'auto_select_gpus': True } if configs['device'] == 'cuda' else {},
         log_every_n_steps=1,
-        val_check_interval=100,
+        val_check_interval=0.5,
         limit_val_batches=100,
         max_epochs=configs['epochs'], 
-        accumulate_grad_batches = 1,
         logger=logger)
 
 
