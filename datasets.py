@@ -13,8 +13,6 @@ from tqdm import tqdm
 
 
 
-
-
 def pad_collate(batch):
     bX, by1, by2, by3 = zip(*batch)
 

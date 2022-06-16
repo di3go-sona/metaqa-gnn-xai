@@ -25,7 +25,7 @@ class GraphEncoder(torch.nn.Module):
         
     @property
     def n_relations(self):
-        return self.rels_embeddings.num_embeddings
+        return self.rels_embeddings.num_embeddings 
         
     @property
     def embeddings_size(self):

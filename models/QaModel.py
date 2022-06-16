@@ -51,13 +51,18 @@ class QaModel(pl.LightningModule):
         
         self._graph_index = graph_index.to(self.configs['device'])
         
+        self.hidden_size = 32
+        
         self.rgcn_layers = torch.nn.ModuleList(
-            [ RGCNConv(self.emb_size, self.emb_size, self.graph_encoder.n_relations, )   for l in range(self.configs['n_layers'])]
+            [ RGCNConv(self.emb_size*3, self.emb_size, self.graph_encoder.n_relations, ), 
+             RGCNConv(self.emb_size, self.hidden_size, self.graph_encoder.n_relations, )]
         )
             
-        self.score_candidate = Linear(self.emb_size, 1)
+        self.score_candidate = Linear(self.hidden_size, 1)
         self.loss = WeightedFocalLoss()
         self.save_hyperparameters()
+        
+        self.node_role_embedding = torch.nn.Embedding(2, self.emb_size)
 
     @property
     def graph_index(self):
@@ -68,15 +73,16 @@ class QaModel(pl.LightningModule):
         return self.graph_embeddings.shape[1]
     
     def get_name(self):
-        params = ['learning_rate', 'p_dropout', 'reg', 'n_layers']
-        params_string = '|'.join([f"{p}={getattr(self, p)}" for p in params])
-        return f"{self.__class__.__name__}|{params_string}"
+        # params = ['learning_rate', 'p_dropout', 'reg', 'n_layers']
+        # params_string = '|'.join([f"{p}={getattr(self, p)}" for p in params])
+        hops = ''.join(self.configs['hops'])
+        return f"{self.__class__.__name__}|hops={hops}"
     
     
     def configure_optimizers(self):
         
         no_decay = ["bias", "norm.weight",]
-        freeze = [ "question_encoder.model", 'graph_encoder']
+        freeze = [ "question_encoder.model", ]
         params = []
         for n,p in self.named_parameters():
             if any([stopword in n for stopword in freeze]):
@@ -102,30 +108,11 @@ class QaModel(pl.LightningModule):
         return optimizer
 
     def training_step(self, batch, batch_idx):
-        torch.cuda.empty_cache()
         questions, roots, answers_mask, hops =  batch
-        questions_emb = self.question_encoder(list(questions))
-        answers_emb = self.graph_encoder.nodes_embeddings(torch.arange(self.graph_encoder.n_nodes,  device=self.device, requires_grad=False))
-        batch_size = len(questions_emb)
-        n_nodes = self.graph_encoder.n_nodes
-
-
-        # Encode Answers 
-        _Z = []
-        for i, (q_emb, r) in enumerate(zip(questions_emb, roots)):
-            answers_emb_hat = answers_emb + ((torch.arange(n_nodes, device ='cuda', requires_grad=False) == r).unsqueeze(-1)  * q_emb)
-            
-            z = None
-            for  i, rgcn in enumerate(self.rgcn_layers):
-                z = answers_emb_hat if z is None else z
-                z = rgcn(answers_emb_hat, *self.graph_index )
-                if i < self.configs['n_layers']:
-                    z = torch.nn.ReLU()(z)
-            
-            _Z.append(z)
-
-        Z = torch.vstack(_Z)
-
+        batch_size, n_nodes  = answers_mask.shape
+        
+        # Encode Answers
+        Z = self(questions, roots, answers_mask)
         # Decode ( score ) Answers 
         scores = self.score_candidate(Z).view(batch_size, -1)
         
@@ -143,7 +130,7 @@ class QaModel(pl.LightningModule):
         
         
         # Compute and log loss 
-        candidates_indices = list(WeightedRandomSampler(weights.view(-1), batch_size*10, replacement=False))        
+        candidates_indices = list(WeightedRandomSampler(weights.view(-1), batch_size*50, replacement=True))        
         candidates_scores = scores.view(batch_size*n_nodes, -1)[candidates_indices]
         candidates_answers_mask = answers_mask.view(-1)[candidates_indices]
 
@@ -159,7 +146,7 @@ class QaModel(pl.LightningModule):
         prec_pos = (scores[answers_mask == 0] < 0).sum() / (answers_mask == 0).sum()
         prec_neg = (scores[answers_mask == 1] >= 0).sum() / (answers_mask == 1).sum()
         prec_bal = (prec_pos + prec_neg)/2
-        prec = (prec_pos*w_pos + prec_neg*w_neg)
+        prec = (scores == answers_mask).float().mean()
         
         self.log('train/prec', prec)
         self.log('train/prec_bal', prec_bal)
@@ -183,31 +170,46 @@ class QaModel(pl.LightningModule):
 
         return loss
     
-    def validation_step(self, batch, batch_idx):
-
-        questions, roots, answers_mask, hops =  batch
-        questions_emb = self.question_encoder(list(questions))
+    def forward(self, questions, roots, answers_mask):
+        
+        # Encode Answers
         answers_emb = self.graph_encoder.nodes_embeddings(torch.arange(self.graph_encoder.n_nodes,  device=self.device, requires_grad=False))
-        batch_size = len(questions_emb)
-        n_nodes = self.graph_encoder.n_nodes
+        
+        # Encode Questions
+        questions_emb = self.question_encoder(list(questions))
+        # Encode Roots
+        batch_size, n_nodes = answers_mask.shape
+        roots_mask = torch.zeros( (batch_size, n_nodes),dtype=torch.long, device=self.device)
+        roots_mask[torch.arange(batch_size, device=self.device), roots] = 1
+        node_role_emb = self.node_role_embedding(roots_mask)
 
-
-        # Encode Answers 
+        # Pass RGCN, one element at a time 
         _Z = []
-        for i, (q_emb, r) in enumerate(zip(questions_emb, roots),1):
-            answers_emb_hat = answers_emb + ((torch.arange(n_nodes, device ='cuda', requires_grad=False) == r).unsqueeze(-1)  * q_emb)
-            
+        for i, (q_emb, r_emb) in enumerate(zip(questions_emb, node_role_emb),1):
+            answers_emb_hat = torch.cat( 
+                                        (answers_emb, 
+                                         q_emb.repeat((self.graph_encoder.n_nodes,1)), 
+                                         r_emb) ,1 )
+
             z = None
             for  i, rgcn in enumerate(self.rgcn_layers):
                 z = answers_emb_hat if z is None else z
-                z = rgcn(answers_emb_hat, *self.graph_index )
-                # if i < self.configs['n_layers']:
+                z = rgcn(z, *self.graph_index )
                 z = torch.nn.ReLU()(z)
             
             _Z.append(z)
 
         Z = torch.vstack(_Z)
+        return Z
+        
+    def validation_step(self, batch, batch_idx):
 
+        questions, roots, answers_mask, hops =  batch
+        batch_size, n_nodes  = answers_mask.shape
+        
+        # Encode Answers
+        Z = self(questions, roots, answers_mask)
+        
         # Decode ( score ) Answers 
         scores = self.score_candidate(Z).view(batch_size, -1)
          
@@ -217,9 +219,6 @@ class QaModel(pl.LightningModule):
         weights = torch.zeros_like(answers_mask, dtype=torch.float, requires_grad=False)
         weights[answers_mask == 1] = w_pos
         weights[answers_mask == 0] = w_neg
-
-
-        
         
         # Compute and log loss 
         # loss = torch.nn.BCEWithLogitsLoss() ( scores, answers_mask.float(), )
@@ -229,7 +228,8 @@ class QaModel(pl.LightningModule):
         prec_pos = (scores[answers_mask == 0] < 0).sum() / (answers_mask == 0).sum()
         prec_neg = (scores[answers_mask == 1] >= 0).sum() / (answers_mask == 1).sum()
         prec_bal = (prec_pos + prec_neg)/2
-        prec = (prec_pos*w_pos + prec_neg*w_neg)
+        prec = (scores == answers_mask).float().mean()
+
         
         self.log('val/prec', prec)
         self.log('val/prec_bal', prec_bal)
@@ -243,7 +243,6 @@ class QaModel(pl.LightningModule):
         for i,a in zip(indices, answers_mask):
             candidate_hits = i[a.bool()]
             for h,v in hits.items():
-                
                 hits[h] = v + (len([c for c in candidate_hits if c < h]) / min(len(candidate_hits), h)) / batch_size
         
 

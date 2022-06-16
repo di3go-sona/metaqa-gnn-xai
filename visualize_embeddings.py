@@ -93,16 +93,16 @@ for s,d,t in tqdm(edges, desc="Adding edges"):
 
 #%%
 for s in ['will smith']:
-    for n in [1,2,3]:
-        edges = nx.dfs_edges(G.to_undirected(), source=s,depth_limit=n)
+
+    edges = nx.dfs_edges(G.to_undirected(), source=s,depth_limit=n)
+    
+    # print(len(list(edges)))
+    
+    g = nx.classes.DiGraph()
+    g.add_edges_from(edges)
+    # for e in edges:
         
-        # print(len(list(edges)))
-        
-        g = nx.classes.DiGraph()
-        g.add_edges_from(edges)
-        # for e in edges:
-            
-        nx.drawing.nx_pydot.write_dot(g,f'./dataset/kb_{s}_{n}.dot')
+    nx.drawing.nx_pydot.write_dot(g,f'./dataset/kb_{s}_{n}.dot')
 
 
 # %%
