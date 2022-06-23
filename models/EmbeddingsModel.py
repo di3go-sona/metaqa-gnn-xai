@@ -69,20 +69,20 @@ class EmbeddingsModel(pl.LightningModule):
         
         # pos_loss = self.decoder.loss()
         # neg_src_loss = self.decoder.loss( self.encoder(triplets_index.T), self.encoder(corrupted_src_triplets_index.T))
-        neg_dst_los = self.decoder.loss( self.encoder(triplets_index.T), self.encoder(corrupted_dst_triplets_index.T))
-        # loss = neg_src_loss + neg_dst_los
+        loss = self.decoder.loss( self.encoder(triplets_index.T), self.encoder(corrupted_dst_triplets_index.T))
+        # loss = neg_src_loss + loss
         # self.log('train/neg_src_loss', neg_src_loss.item())
-        self.log('train/neg_dst_los', neg_dst_los.item())
+        self.log('train/loss', loss.item())
         # self.log('train/neg_src_loss', neg_src_loss.item())
         
-        return  neg_dst_los
+        return  loss
         
     def validation_step(self, batch, batch_idx):
 
 
         triplets_index, mask = batch
-
         batch_size, _ = triplets_index.shape
+        
         (src, dst, rel) = triplets_index.T
         
         val_src = src.repeat((self.n_nodes,1)).flatten()
@@ -101,6 +101,8 @@ class EmbeddingsModel(pl.LightningModule):
         Z = self.encoder(val_triplets)
 
         scores = self.decoder(Z).reshape(batch_size, -1).T
+        
+        
 
         # loss = self.decoder.loss( scores.T, mask)
         # self.log('val/loss', loss.item())

@@ -9,18 +9,14 @@ from models import *
 from models.EmbeddingsModel import EmbeddingsModel
 
 
-
-# os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
-# os.environ["CUDA_VISIBLE_DEVICES"]="1"
-
 config = {
-    "embeddings_size": int(os.environ.get("embeddings_size", 128)),
-    "learning_rate":   float(os.environ.get("learning_rate", 0.001)),
-    "epochs":          int(os.environ.get("epochs", 50000)),
-    "regularization":  float(os.environ.get("regularization", 0.0)),
-    "batch_size":      int(os.environ.get("batch_size", 512)),
-    "val_batch_size":  int(os.environ.get("val_batch_size", 8)),
-    "decoder":         str(os.environ.get("decoder", 'DistmultDecoder')), #DistmultDecoder
+    "embeddings_size": 128,
+    "learning_rate":   0.001,
+    "epochs":          50000,
+    "regularization":  0.0,
+    "batch_size":      512,
+    "val_batch_size":  8,
+    "decoder":          'DistmultDecoder', #
     'device': 'cuda'
 }
     
