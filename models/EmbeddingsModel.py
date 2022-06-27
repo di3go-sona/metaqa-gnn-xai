@@ -38,6 +38,7 @@ class EmbeddingsModel(pl.LightningModule):
         
         
     def training_step(self, batch, batch_idx):
+        
 
         triplets_index = batch
         src, dst, rel = triplets_index.T
