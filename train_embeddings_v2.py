@@ -22,7 +22,6 @@ class KGEModel(pl.LightningModule):
         self.interaction = DistMultInteraction()
         self.neg_sampler = BasicNegativeSampler(mapped_triples=torch.tensor(kg_data.triplets), num_negs_per_pos=negs)
         self.loss_func = MarginRankingLoss(margin=1.0, reduction='mean')
-        # self.loss_func = BCEWithLogitsLoss()
         
         self.nodes_emb = Embedding(kg_data.n_nodes, emb_size, max_norm=1)
         self.relations_emb = Embedding(kg_data.n_relations, emb_size)
@@ -35,11 +34,7 @@ class KGEModel(pl.LightningModule):
         return 'ComplEx'
         
     def encode(self, s,r,t ):
-        # s,r,t = triples.T
-        
-        # print('encode shape', triples.shape)
-        # print(triples)
-        
+
         emb = (
             self.nodes_emb(s), 
             self.relations_emb(r), 
