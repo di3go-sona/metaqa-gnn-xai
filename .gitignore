@@ -1,5 +1,8 @@
-FB15k-237/
 wandb/
+metaqa/
+checkpoints/
 venv/
 __pycache__/
-None/
+*.cache
+dataset/
+lightning_logs/
