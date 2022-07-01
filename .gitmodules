@@ -1,0 +1,3 @@
+[submodule "audio2vec"]
+	path = audio2vec
+	url = https://github.com/bryanwuAC/audio2vec
