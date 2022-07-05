@@ -1,34 +1,36 @@
 #%%
-import torch
-import transformers
+import torch, transformers
 from train_qa_v2 import QAModel, QAData
 from transformers import AutoTokenizer, BertModel
+import click
+import gradio as gr
+#%%
 
 
 
-# import click
-# @click.command()
-# @click.argument('model-path', type=str)
-def run(model_path):
+
+@click.command()
+@click.argument('model-path', type=str)
+@click.option('--no-gpu', default=False, show_default=True, is_flag=True)
+def main(model_path, no_gpu):
     hops = int (model_path.rsplit('/', 2)[1][0])
-    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+    device = 'cpu' if no_gpu else 'cuda:0'
+    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased", map_location={'cuda:0': device })
     
     data = QAData('dataset', [1], tokenizer, use_ntm=False)
     model = QAModel.load_from_checkpoint(model_path) 
     
-    batch = next(iter(data.val_dataloader()))
-    print(batch)
-    # print(hops)
-    
-    
-# tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-# data = QAData('dataset', [1], tokenizer, train_batch_size=train_batch_size, val_batch_size=val_batch_size, use_ntm=ntm)
-# kge_model = KGEModel.load_from_checkpoint(checkpoints/qa/3-hops/DistMultInteraction()|256|epoch=4.ckpt)
-# model = QAModel.load_from_checkpoint()
+    def run(question_id):
+        data
+        return f"Selected question {question_id}"
 
+    slider = gr.Slider
+    demo = gr.Interface(fn=run, inputs="text", outputs="text")
 
-
+    demo.launch()
 
 #%%
 if __name__ == '__main__':
-    run()
+    main()
+    
+    
