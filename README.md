@@ -1,4 +1,4 @@
-# rgcn-link-prediction
+# metaqa-gnn-xai
 A question answering model based on Knowledge Graph Embeddings and Graph Neural Networks
 
 
