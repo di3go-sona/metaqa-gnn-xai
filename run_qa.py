@@ -1,6 +1,6 @@
 #%%
 import torch, transformers
-from train_qa_v2 import QAModel, QAData
+from train_qa import QAModel, QAData
 from transformers import AutoTokenizer, BertModel
 import click
 import gradio as gr
