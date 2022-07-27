@@ -88,7 +88,7 @@ class QAModel(pl.LightningModule):
         
         nodes_emb = self.nodes_emb(torch.arange(self.nodes_emb.num_embeddings, device=self.device))
         nodes_emb = self.rgcn1(nodes_emb, self.triples[:,[0,2]].T, self.triples[:,1])
-        nodes_emb
+        # nodes_emb
         # nodes_emb = Embedding.from_pretrained(nodes_emb)
         # print(nodes_emb.shape, s.shape,t.shape, nodes_emb[s].shape)
         
