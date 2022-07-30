@@ -22,8 +22,9 @@ class JointQAModel(pl.LightningModule):
                  hidden_sizes,
                  lr,
                  num_negs_per_pos,
+                 aggr = 'max',
                  bert_model = "prajjwal1/bert-mini",
-                 fast=False) -> None:
+                 fast = False) -> None:
         super().__init__()
         
 
@@ -31,23 +32,11 @@ class JointQAModel(pl.LightningModule):
         self.num_negs_per_pos = num_negs_per_pos
         
         self.qa_interaction = DistMultInteraction()
-        # self.qa_interaction = ERMLPInteraction(hidden_sizes[-1], 32)
         self.kge_interaction = TransEInteraction(1)
-        
-        self.qa_neg_sampler = BasicNegativeSampler(mapped_triples=torch.tensor(kg_data.triplets), 
-                                                num_negs_per_pos=self.num_negs_per_pos,
-                                                corruption_scheme=('head',))
-    
-        
-        self.kge_neg_sampler = BasicNegativeSampler(mapped_triples=torch.tensor(kg_data.triplets), 
-                                        num_negs_per_pos=self.num_negs_per_pos,
-                                        corruption_scheme=('head','tail'))
-        
         self.loss_func = MarginRankingLoss(margin=1.0, reduction='mean')
-        
-        
+
+        # Text Model
         self.text_model = BertModel.from_pretrained(bert_model)
-        
         
         if self.text_model.config.hidden_size != hidden_sizes[-1]:
             self.text_linear = torch.nn.Linear(self.text_model.config.hidden_size, hidden_sizes[-1])
@@ -55,88 +44,97 @@ class JointQAModel(pl.LightningModule):
             self.text_linear = torch.nn.Identity()
             
 
+        # Rgcn
         self.layers = len(hidden_sizes)
         if fast:
-            self.rgcn1 = torch_geometric.nn.conv.FastRGCNConv(emb_size, hidden_sizes[0], kg_data.n_relations*2, aggr='mean')
+            self.rgcn1 = torch_geometric.nn.conv.FastRGCNConv(emb_size, hidden_sizes[0], kg_data.n_relations*2, aggr=aggr)
         else:
-            self.rgcn1 = torch_geometric.nn.conv.RGCNConv(emb_size, hidden_sizes[0], kg_data.n_relations*2, aggr='mean')
+            self.rgcn1 = torch_geometric.nn.conv.RGCNConv(emb_size, hidden_sizes[0], kg_data.n_relations*2, aggr=aggr)
         
         if self.layers > 1:
             if fast:
-                self.rgcn2 = torch_geometric.nn.conv.FastRGCNConv(hidden_sizes[0], hidden_sizes[1], kg_data.n_relations*2, aggr='mean')
+                self.rgcn2 = torch_geometric.nn.conv.FastRGCNConv(hidden_sizes[0], hidden_sizes[1], kg_data.n_relations*2, aggr=aggr)
             else:
-                self.rgcn2 = torch_geometric.nn.conv.RGCNConv(hidden_sizes[0], hidden_sizes[1], kg_data.n_relations*2, aggr='mean')
+                self.rgcn2 = torch_geometric.nn.conv.RGCNConv(hidden_sizes[0], hidden_sizes[1], kg_data.n_relations*2, aggr=aggr)
+        if self.layers > 2:
+            if fast:
+                self.rgcn3 = torch_geometric.nn.conv.FastRGCNConv(hidden_sizes[1], hidden_sizes[2], kg_data.n_relations*2, aggr=aggr)
+            else:
+                self.rgcn3 = torch_geometric.nn.conv.RGCNConv(hidden_sizes[1], hidden_sizes[2], kg_data.n_relations*2, aggr=aggr)
             
+        # Cache 
+        self._z_cache = (None, None)
+        self._q_cache = (None, None)
         
-        
-        # Load triples
-        triples = kg_data.triplets.cuda()
-        itriples = torch.index_select(triples, 1, torch.tensor([2,1,0], dtype=torch.long, device=triples.device))
-        itriples[:, 1]  += kg_data.n_relations
-        self.triples = torch.cat((triples, itriples),0) 
-
+        # Edges and nodes
+        self.edge_index = torch.nn.Parameter( kg_data.get_triples(), requires_grad = False)
         self.nodes_emb = Embedding(kg_data.n_nodes, emb_size, max_norm=1)
         self.relations_emb = Embedding(kg_data.n_relations, emb_size, max_norm=1)
-  
         
+        # Samplers
+        self.qa_neg_sampler = BasicNegativeSampler(
+                                mapped_triples= self.edge_index,
+                                num_negs_per_pos= self.num_negs_per_pos,
+                                corruption_scheme= ('head',))
+        
+        self.kge_neg_sampler = BasicNegativeSampler(
+                                mapped_triples= self.edge_index,
+                                num_negs_per_pos= self.num_negs_per_pos,
+                                corruption_scheme= ('head','tail'))
         self.save_hyperparameters()
+        
     
     def get_name(self):
-        return f'{self.qa_interaction}|{self.kge_interaction}|{self.nodes_emb.embedding_dim}'
-    
-    def on_validation_batch_start(self, *args) -> None:
-        self.triples = self.triples.to(self.device)
-        x = self.nodes_emb(torch.arange(self.nodes_emb.num_embeddings, device=self.device))
-        self.rgcn_nodes_emb = self.encode_nodes(x, self.triples)
+        return f'{self.qa_interaction.__class__.__name__}|{self.nodes_emb.embedding_dim}'
         
-    def on_train_batch_start(self, *args) -> None:
-        self.triples = self.triples.to(self.device)
-        x = self.nodes_emb(torch.arange(self.nodes_emb.num_embeddings, device=self.device))
-        self.rgcn_nodes_emb = self.encode_nodes(x, self.triples)
-    
-    def encode_nodes(self, x, index):
-
-        index = index.to(self.device)
-        rgcn_nodes_emb = self.rgcn1(x, index[:,[0,2]].T, index[:,1])
+    def encode_nodes(self, x, edge_index, cache_id = None):
+        old_cache_id, old_z = self._z_cache
+        if cache_id is not None and cache_id == old_cache_id:
+            return old_z
+        if x is None:
+            x = self.nodes_emb(torch.arange(self.nodes_emb.num_embeddings, device=self.device))
+        if edge_index is None:
+            edge_index = self.edge_index
+        
+        z = self.rgcn1(x, edge_index[:,[0,2]].T, edge_index[:,1])
+        
         if self.layers > 1 :
-            rgcn_nodes_emb = self.rgcn2(rgcn_nodes_emb.relu(), index[:,[0,2]].T, index[:,1])
-        return rgcn_nodes_emb
+            z = self.rgcn2(z.relu(), edge_index[:,[0,2]].T, edge_index[:,1])
+        if self.layers > 2 :
+            z = self.rgcn3(z.relu(), edge_index[:,[0,2]].T, edge_index[:,1])
+        
+        self._z_cache = (cache_id, z)
+        return z
     
-    def qa_encode_question(self, question_toks):
+    def encode_question(self, question_toks, cache_id = None):
         ''' Encodes the text tokens, input should have shape (seq_len, batch_size), return has shape (batch_size, embedding_size)'''
+        old_cache_id, old_q = self._q_cache
+        if cache_id is not None and cache_id == old_cache_id:
+            return old_q
+        
 
-        enc = self.text_model(question_toks.T).last_hidden_state[:,0,:]
-        enc_hat = self.text_linear(enc)
-        return enc_hat
+        q = self.text_model(question_toks.T).last_hidden_state[:,0,:]
+        q = self.text_linear(q)
         
-    def qa_encode_nodes(self, nodes: List[ torch.tensor ]):
-        ''' Encodes the node tokens '''
+        self._q_cache = (cache_id, q)
+        return q                
         
-        for n in nodes:
-            yield self.rgcn_nodes_emb[n]
-         
-    def qa_encode(self, s, t, questions_emb):
-        
-        source_nodes_emb, target_nodes_emb = self.qa_encode_nodes((s, t))
-        
-        
-        emb =  (
-            source_nodes_emb ,
-            questions_emb , 
-            target_nodes_emb
-        ) 
+    def qa_forward(self, s, t, questions):
+        z = self.encode_nodes(None, None)
+        q = self.encode_question(questions)
 
-        return emb
+        scores = self.qa_interaction(
+            z[s], 
+            q, 
+            z[t]
+        )
+        
+        return scores
     
-
-                
-        
-    def qa_forward(self, s, t, questions_emb):
-        return self.qa_interaction(*self.qa_encode(s, t, questions_emb))
-    
-    def qa_forward_triples(self, triples, questions_emb):
+    def qa_forward_triples(self, triples, questions):
         s, _, t = triples.T
-        return self.qa_interaction(*self.qa_encode(s, t, questions_emb))
+        return self.qa_forward(s, t, questions)
+
     
     def training_step(self, batch, batch_idx) :
         qa_loss = self.qa_training_step(batch['qa'], batch_idx)
@@ -148,17 +146,17 @@ class JointQAModel(pl.LightningModule):
         # self.kge_validation_step(batch['kge'], batch_idx)
         
     def qa_training_step(self, batch, batch_idx):
-        triples, q_toks= batch
+        triples, questions= batch
         
         
-        questions_emb = self.qa_encode_question(q_toks)
+        # questions_emb = self.encode_question(questions)
         corr_triples = self.qa_neg_sampler.corrupt_batch(positive_batch=triples)
 
         
         pos_scores = self.qa_forward_triples(triples, 
-                                  questions_emb)
+                                  questions)
         neg_scores = self.qa_forward_triples(corr_triples, 
-                                  questions_emb)
+                                  questions)
         
         loss = self.loss_func.forward(pos_scores, neg_scores)
 
@@ -167,13 +165,9 @@ class JointQAModel(pl.LightningModule):
         return loss
     
     def forward(self, x, edge_index, src_idx, question, **kwargs ):
-       
-        
-
-        # s,d,r = edge_index.coo()
         triples = torch.stack((edge_index[0],kwargs['relations'] ,edge_index[1])).T
-        # print(x.shape, edge_index.shape, question.shape, triples.shape )
-        qa_emb = self.qa_encode_question(question.unsqueeze(-1))
+
+        qa_emb = self.encode_question(question.unsqueeze(-1))
         nodes_emb = self.encode_nodes(x, triples)
 
         scores = self.qa_interaction(nodes_emb[src_idx].unsqueeze(0), qa_emb, nodes_emb)
@@ -182,9 +176,9 @@ class JointQAModel(pl.LightningModule):
     def qa_validation_step(self, batches, batch_idx):
         res = []
         for batch_type, batch in batches.items():
-            src, true_targets_list, q_toks =  batch
+            src, true_targets_list, questions =  batch
             
-            questions_emb = self.qa_encode_question(q_toks)
+            # questions_emb = self.encode_question(q_toks)
             candidate_targets = torch.arange(self.nodes_emb.num_embeddings,
                                     dtype=torch.long,
                                     device=self.device).unsqueeze(-1)
@@ -194,11 +188,11 @@ class JointQAModel(pl.LightningModule):
                         dtype=torch.long,
                         device=self.device)
 
-            scores = self.qa_forward(src, candidate_targets, questions_emb)
+            scores = self.qa_forward(src, candidate_targets, questions)
             scores[torch.stack( (src, batch_indices  ), 1).T.tolist() ] = -1
             pred_targets = scores.topk(100, dim=0)
 
-            res.append(pred_targets)
+            res.append(( scores, pred_targets))
 
             for true_targets, pred_target in zip(true_targets_list.T, pred_targets.indices.T):
                 for k in [1,3,10,100]:

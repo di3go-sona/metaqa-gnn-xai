@@ -7,6 +7,8 @@ val_batch_size=128
 ntm=False
 hops=2
 
+QUESTION_ID = 3253
+ANSWER_ID = 0
 
 
 tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
@@ -16,39 +18,14 @@ qa_data = QAData('dataset', [hops], tokenizer, train_batch_size= qa_train_batch_
 
 #%%
 
-from torch_sparse import SparseTensor
-from torch_geometric.utils import remove_self_loops
-
-model = JointQAModel.load_from_checkpoint('checkpoints/qa/2-hops/DistMultInteraction()|TransEInteraction()|512|epoch=2549.ckpt')
+model = JointQAModel.load_from_checkpoint('checkpoints/qa/2-hops/DistMultInteraction|256|epoch=89.ckpt', fast=True)
 
 x = model.nodes_emb.weight
-src_idx, _, dst_idx, question = qa_data.val_ds_unflattened[0]
+src_idx, _, dst_idx, question = qa_data.val_ds_unflattened[QUESTION_ID]
 
 
-index = model.triples.T[[0,2]].cpu()
-relations = model.triples.T[1].cpu()
-
-index, relations = remove_self_loops(index, relations)
-
-# model.forward(x, index, dst_idx[0], question, relations=relations ).shape
-
-# sub_x, sub_index, _, _, kwargs = explainer.__subgraph__(dst_idx[0], x, index, 
-#                                                 relations= relations,
-#                                                 src_idx= src_idx,
-#                                                 question= question)
-
-
-
-# model.forward(sub_x, sub_index, **kwargs ).shape
-
-
-# sparse_index = SparseTensor(row=model.triples.T[0], col=model.triples.T[2], value=model.triples.T[1],
-#                    sparse_sizes=(model.nodes_emb.num_embeddings, model.nodes_emb.num_embeddings))
-# model.forward(x, sparse_index, src_idx, question ).shape
-
-
-
-
+index = model.edge_index.T[[0,2]].cpu()
+relations = model.edge_index.T[1].cpu()
 
 
 
@@ -514,12 +491,12 @@ class GNNExplainer(torch.nn.Module):
 
 
 explainer = GNNExplainer(model,
-    epochs=500,
+    epochs=100,
     return_type='raw',
     feat_type='scalar',
     num_hops=2,)
 
-node_feat_mask, edge_mask = explainer.explain_node(dst_idx[0], 
+node_feat_mask, edge_mask = explainer.explain_node(dst_idx[ANSWER_ID], 
                                                 x,
                                                 index,
                                                 relations= relations,
