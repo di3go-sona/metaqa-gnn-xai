@@ -5,7 +5,7 @@ kge_train_batch_size=128
 qa_train_batch_size=128
 val_batch_size=128
 ntm=False
-hops=2
+hops=1
 
 QUESTION_ID = 3253
 ANSWER_ID = 0
@@ -18,7 +18,7 @@ qa_data = QAData('dataset', [hops], tokenizer, train_batch_size= qa_train_batch_
 
 #%%
 
-model = JointQAModel.load_from_checkpoint('checkpoints/qa/2-hops/DistMultInteraction|256|epoch=89.ckpt', fast=True)
+model = JointQAModel.load_from_checkpoint('checkpoints/qa/1-hops/DistMultInteraction|64|64>>1|epoch=7.ckpt', fast=True)
 
 x = model.nodes_emb.weight
 src_idx, _, dst_idx, question = qa_data.val_ds_unflattened[QUESTION_ID]
@@ -133,8 +133,8 @@ class GNNExplainer(torch.nn.Module):
             self.edge_mask.fill_(float('inf'))  # `sigmoid()` returns `1`.
         self.loop_mask = edge_index[0] != edge_index[1]
         
-        # print(f'Edge mask: {self.edge_mask.shape}')
-        # print(f'Loop mask: {self.loop_mask.shape}')
+
+
 
         for module in self.model.modules():
             if isinstance(module, MessagePassing):
@@ -179,7 +179,7 @@ class GNNExplainer(torch.nn.Module):
             node_idx, self.num_hops, edge_index, relabel_nodes=True,
             num_nodes=num_nodes, flow=self.__flow__())
 
-        # print(edge_mask.shape, x.shape)
+
         x = x[subset]
         for key, item in kwargs.items():
             if torch.is_tensor(item) and item.size(0) == num_nodes:
@@ -316,14 +316,14 @@ class GNNExplainer(torch.nn.Module):
 
         # Get the initial prediction.
         with torch.no_grad():
-            # print('before', x.shape, edge_index.shape, kwargs.keys())
+
             out = self.model(x=x, edge_index=edge_index, **kwargs)
             if self.return_type == 'regression':
                 prediction = out
             else:
                 log_logits = self.__to_log_prob__(out)
                 pred_label = log_logits.argmax(dim=-1)
-        # print('done')
+
         self.__set_masks__(x, edge_index)
         self.to(x.device)
 
@@ -340,15 +340,15 @@ class GNNExplainer(torch.nn.Module):
         for epoch in range(1, self.epochs + 1):
             optimizer.zero_grad()
             h = x * self.node_feat_mask.sigmoid()
-            # print('train', x.shape, edge_index.shape, kwargs.keys())
+
             out = self.model(x=h, edge_index=edge_index, **kwargs)
-            # print('step done')
+
             if self.return_type == 'regression':
                 loss = self.__loss__(mapping, out, prediction)
             else:
                 log_logits = self.__to_log_prob__(out)
                 loss = self.__loss__(mapping, log_logits, pred_label)
-            # print(loss)
+
             loss.backward(retain_graph=True)
             optimizer.step()
 

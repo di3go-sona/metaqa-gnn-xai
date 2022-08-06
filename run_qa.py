@@ -22,7 +22,7 @@ graph = None
 # @click.option('--ckpt-folder', default='../checkpoints/*/*/*.ckpt', type=str)
 
 
-def main(cpu, ckpt_folder, default_model='checkpoints/qa/2-hops/DistMultInteraction|256|epoch=499.ckpt'):
+def main(cpu, ckpt_folder):
     global device
     
     device = 'cpu' if cpu else  'cuda:0'
@@ -73,9 +73,9 @@ def main(cpu, ckpt_folder, default_model='checkpoints/qa/2-hops/DistMultInteract
         answers_selector = gr.Radio.update(choices= answers_names, visible= True)
         
         predict_button = gr.Button.update(visible= True)
-        plot_button = gr.Button.update(visible= True)
+        # plot_button = gr.Button.update(visible= True)
         
-        return question_selector, answers_selector, predict_button, plot_button
+        return question_selector, answers_selector, predict_button
     
     def predict(index):
         global data
@@ -97,22 +97,8 @@ def main(cpu, ckpt_folder, default_model='checkpoints/qa/2-hops/DistMultInteract
                         (topk.values.squeeze() / topk.values.max() ).tolist()
                         )
                     )
-        predictions_box = gr.Label.update(value= preds, visible= True)
-        return predictions_box
-    
-    def plot(index):
-        global hops
-        global graph
-        
-        root, _, answers, question = data.val_ds_unflattened[int(index)]
-        preds = model.qa_validation_step(
-            {'inference': 
-                (torch.tensor(root, dtype=int, device=device).unsqueeze(-1), 
-                torch.tensor(answers, dtype=int, device=device).unsqueeze(-1), 
-                question.to(device).unsqueeze(-1)
-                )
-                }, -1)
-        scores, topk = next(iter(preds))
+        predictions_box = gr.Label.update(value= preds, visible= True)    
+
         scores = scores.squeeze().tolist()
         
         root_name = data.entities_names[root]
@@ -124,18 +110,29 @@ def main(cpu, ckpt_folder, default_model='checkpoints/qa/2-hops/DistMultInteract
         for node_id in topk.indices.squeeze().tolist():
             node_name = data.entities_names[node_id]
             if node_name in subgraph:
-                subgraph.nodes[node_name]['color'] = '#dd4b39'
-        for answer_name in answers_names:
-            subgraph.nodes[answer_name]['color'] = '#00ff1e'     
-        for node_name in list(subgraph.nodes):
-            node_id = data.entities_ids[node_name]
-            subgraph.nodes[node_name]['value'] = scores[node_id]
-        net = Network("600px", "1000px")
+                if node_name in answers_names:
+                    subgraph.nodes[node_name]['color'] = '#00ff1e'  
+                else:
+                    subgraph.nodes[node_name]['color'] = '#dd4b39'
+                
+   
+        # for node_name in list(subgraph.nodes):
+        #     node_id = data.entities_ids[node_name]
+        #     score =  scores[node_id]
+        #     subgraph.nodes[node_name]['value'] = score
+            
+        #     if score > max([scores[a] for a in answers]):    
+        #         subgraph.nodes[node_name]['color'] = '#dd4b39'
+                
+        # for answer_name in answers_names:
+        #     subgraph.nodes[answer_name]['color'] = '#00ff1e'  
+            
+        net = Network("600px", "1000px", directed =True)
         net.from_nx(subgraph)
         html = net.generate_html().replace('\"', '\'')
 
     
-        return f'''<iframe sandbox="allow-scripts" width="1100px" height="700px" srcdoc="{html}"></iframe>'''
+        return predictions_box, f'''<iframe sandbox="allow-scripts" width="1100px" height="700px" srcdoc="{html}"></iframe>'''
 
         
         
@@ -155,9 +152,9 @@ def main(cpu, ckpt_folder, default_model='checkpoints/qa/2-hops/DistMultInteract
         answers_names_selector = gr.Radio([], visible=False, interactive=True)
         
         predict_button = gr.Button(value="Predict", variant="primary", visible=False)
-        plot_button = gr.Button(value="Plot",  visible=False)
+        # plot_button = gr.Button(value="Plot",  visible=False)
         
-        predictions_box = gr.Label(num_top_classes=15,  visible=False)
+        predictions_box = gr.Label(num_top_classes=10,  visible=False)
         plot_box = gr.HTML()
 
         model_selector.change(fn=update_model, 
@@ -167,19 +164,19 @@ def main(cpu, ckpt_folder, default_model='checkpoints/qa/2-hops/DistMultInteract
         
         question_selector.change(fn=update_question, 
                 inputs=question_selector, 
-                outputs=[root_name_textbox, answers_names_selector, predict_button, plot_button]
+                outputs=[root_name_textbox, answers_names_selector, predict_button]
                 )
         
         predict_button.click(
             fn=predict, 
             inputs=question_selector,
-            outputs=predictions_box
+            outputs=[ predictions_box,plot_box]
         )
-        plot_button.click(
-            fn=plot, 
-            inputs=question_selector,
-            outputs=plot_box
-        )
+        # plot_button.click(
+        #     fn=plot, 
+        #     inputs=question_selector,
+        #     outputs=plot_box
+        # )
         
         
         
