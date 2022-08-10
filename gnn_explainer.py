@@ -1,33 +1,6 @@
 #%%
 from train_joint import *
 from torch_geometric.nn import GCNConv, GNNExplainer
-kge_train_batch_size=128
-qa_train_batch_size=128
-val_batch_size=128
-ntm=False
-hops=1
-
-QUESTION_ID = 3253
-ANSWER_ID = 0
-
-
-tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-kge_data = EmbeddingsData('dataset', train_batch_size= kge_train_batch_size, val_batch_size= val_batch_size)
-qa_data = QAData('dataset', [hops], tokenizer, train_batch_size= qa_train_batch_size, val_batch_size= val_batch_size, use_ntm= ntm)
-
-
-#%%
-
-model = JointQAModel.load_from_checkpoint('checkpoints/qa/1-hops/DistMultInteraction|64|64>>1|epoch=7.ckpt', fast=True)
-
-x = model.nodes_emb.weight
-src_idx, _, dst_idx, question = qa_data.val_ds_unflattened[QUESTION_ID]
-
-
-index = model.edge_index.T[[0,2]].cpu()
-relations = model.edge_index.T[1].cpu()
-
-
 
 
 #%%
@@ -490,80 +463,58 @@ class GNNExplainer(torch.nn.Module):
 
 
 
-explainer = GNNExplainer(model,
-    epochs=100,
-    return_type='raw',
-    feat_type='scalar',
-    num_hops=2,)
+def run():
 
-node_feat_mask, edge_mask = explainer.explain_node(dst_idx[ANSWER_ID], 
-                                                x,
-                                                index,
-                                                relations= relations,
-                                                src_idx= src_idx,
-                                                question= question)
-import matplotlib.pyplot as plt
-plt.figure(figsize=(30,30))
-ax, G = explainer.visualize_subgraph(dst_idx[0], index, edge_mask)
+    MODEL_PATH = 'checkpoints/qa/2-hops/DistMultInteraction|64|64>32>1|epoch=13.ckpt'
+    QUESTION_ID = 3253
+    ANSWER_ID = 0
 
-# ax, G = explainer.visualize_subgraph(node_idx, index, edge_mask)
-# plt.show()
+
+    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+
+    model = JointQAModel.load_from_checkpoint(MODEL_PATH, fast=True)
+    qa_data = QAData('dataset', [model.hops], tokenizer, False)
+
+    x = model.nodes_emb.weight
+    src_idx, _, dst_idx, question = qa_data.val_ds_unflattened[QUESTION_ID]
 
 
 
+    index = model.edge_index.T[[0,2]].cpu()
+    relations = model.edge_index.T[1].cpu()
 
-# #%%
-# import os.path as osp
-
-# import matplotlib.pyplot as plt
-# import torch
-# import torch.nn.functional as F
-
-# import torch_geometric.transforms as T
-# from torch_geometric.datasets import Planetoid
-# from torch_geometric.nn import GCNConv, GNNExplainer
-
-# dataset = 'Cora'
-# path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', 'Planetoid')
-# transform = T.Compose([T.GCNNorm(), T.NormalizeFeatures()])
-# dataset = Planetoid(path, dataset, transform=transform)
-# data = dataset[0]
+    subset, index, inv, edge_mask = k_hop_subgraph(src_idx, model.hops, index)
+    relations = relations[edge_mask]
 
 
+    explainer = GNNExplainer(model,
+        epochs=100,
+        return_type='raw',
+        feat_type='scalar',
+        num_hops=2,)
 
-# #%%
-# class Net(torch.nn.Module):
-#     def __init__(self):
-#         super().__init__()
-#         self.conv1 = GCNConv(dataset.num_features, 16, normalize=False)
-#         self.conv2 = GCNConv(16, dataset.num_classes, normalize=False)
+    node_feat_mask, edge_mask = explainer.explain_node(dst_idx[ANSWER_ID], 
+                                                    x,
+                                                    index,
+                                                    relations= relations,
+                                                    src_idx= src_idx,
+                                                    question= question)
 
-#     def forward(self, x, edge_index, edge_weight):
-#         x = F.relu(self.conv1(x, edge_index, edge_weight))
-#         x = F.dropout(x, training=self.training)
-#         x = self.conv2(x, edge_index, edge_weight)
-#         return F.log_softmax(x, dim=1)
-
-
-# device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-# model = Net().to(device)
-# data = data.to(device)
-# optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=5e-4)
-# x, edge_index, edge_weight = data.x, data.edge_index, data.edge_weight
+    #%%
+    ax, G = explainer.visualize_subgraph(dst_idx[ANSWER_ID], index, edge_mask)
 
 
+    for n in G.nodes():
+        name = qa_data.entities_names[n]
+        G.nodes[n]['label'] = name
 
-# for epoch in range(1, 201):
-#     model.train()
-#     optimizer.zero_grad()
-#     log_logits = model(x, edge_index, edge_weight)
-#     print(log_logits.shape)
-#     loss = F.nll_loss(log_logits[data.train_mask], data.y[data.train_mask])
-#     loss.backward()
-#     optimizer.step()
+    for e in G.edges():
+        G.edges[e]['color'] = '#' + hex(int(G.edges[e]['att']*256))[2:] * 3
 
+        
+    from pyvis.network import Network
+    net = Network(directed=True)
+    net.from_nx(G)
+    net.show('nx.html')
 
-
-# # %%
-
-# %%
+# run()

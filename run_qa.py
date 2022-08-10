@@ -10,12 +10,14 @@ import networkx as nx
 import random
 import matplotlib.pyplot as plt
 from pyvis.network import Network
+from gnn_explainer import *
 
 model = None 
 hops = None
 data = None
 device = None
 graph = None
+subgraph = None
 #%%
 # @click.command()
 # @click.option('--cpu', default=False, show_default=True, is_flag=True)
@@ -80,7 +82,8 @@ def main(cpu, ckpt_folder):
     def predict(index):
         global data
         global device
-
+        global subgraph
+        
         root, _, answers, question = data.val_ds_unflattened[int(index)]        
         preds = model.qa_validation_step(
             {'inference': 
@@ -104,17 +107,21 @@ def main(cpu, ckpt_folder):
         root_name = data.entities_names[root]
         answers_names = [ data.entities_names[answer] for answer in answers ]
 
-        subgraph = graph.subgraph(list(nx.traversal.dfs_preorder_nodes(graph.to_undirected(), root_name, depth_limit=2)))
-        subgraph.nodes[root_name]['color'] = '#162347'
+        subgraph = graph.subgraph(list(nx.traversal.dfs_preorder_nodes(graph.to_undirected(), root_name, depth_limit=model.hops)))
+        
 
-        for node_id in topk.indices.squeeze().tolist():
+        for position, node_id in enumerate(topk.indices.squeeze().tolist()):
             node_name = data.entities_names[node_id]
             if node_name in subgraph:
                 if node_name in answers_names:
                     subgraph.nodes[node_name]['color'] = '#00ff1e'  
-                else:
+                elif position < len(answers_names):
                     subgraph.nodes[node_name]['color'] = '#dd4b39'
-                
+                    
+        
+        subgraph.nodes[root_name]['color'] = '#162347'
+        for e in subgraph.edges():
+            subgraph.edges[e]['color'] = 'black'
    
         # for node_name in list(subgraph.nodes):
         #     node_id = data.entities_ids[node_name]
@@ -131,30 +138,81 @@ def main(cpu, ckpt_folder):
         net.from_nx(subgraph)
         html = net.generate_html().replace('\"', '\'')
 
-    
-        return predictions_box, f'''<iframe sandbox="allow-scripts" width="1100px" height="700px" srcdoc="{html}"></iframe>'''
-
         
+        return predictions_box, f'''<iframe sandbox="allow-scripts" width="1100px" height="700px" srcdoc="{html}"></iframe>''', gr.Button.update(visible=True)
+
+    def explain(question_index, answer_name):
+        explainer = GNNExplainer(model,
+        epochs=300,
+        return_type='raw',
+        feat_type='scalar',
+        num_hops=model.hops)
+
+        root, _, answers, question = data.val_ds_unflattened[int(question_index)]        
+        
+        index = model.edge_index.T[[0,2]].cpu()
+        relations = model.edge_index.T[1].cpu()
+
+
+        answer_index = data.entities_ids[answer_name]
+        
+                
+        subset, index, inv, edge_mask = k_hop_subgraph(root, model.hops, index)
+        relations = relations[edge_mask]
+        
+        node_feat_mask, edge_mask = explainer.explain_node(answer_index, 
+                                                        model.nodes_emb.weight.clone(),
+                                                        index,
+                                                        relations= relations,
+                                                        src_idx= root,
+                                                        question= question)
+
+        ax, G = explainer.visualize_subgraph(answer_index, index, edge_mask)
+
+
+        for n in G.nodes():
+            name = data.entities_names[n]
+            G.nodes[n]['label'] = name
+            if 'color' in subgraph.nodes[name]:
+                G.nodes[n]['color'] = subgraph.nodes[name]['color']
+
+        print(G.edges())
+        print(subgraph.edges())
+        for e in G.edges():
+            # name = tuple(data.entities_names[ei] for ei in e)
+            G.edges[e]['color'] = '#' + hex(int((1-G.edges[e]['att'])*256))[2:] * 3
+        
+            
+        net = Network("600px", "1000px", directed =True)
+        net.from_nx(G)
+        html = net.generate_html().replace('\"', '\'')
+
+    
+        return f'''<iframe sandbox="allow-scripts" width="1100px" height="700px" srcdoc="{html}"></iframe>'''
+
         
     demo = gr.Blocks()
 
     with demo:
         gr.Markdown(
         """
-        # Hello World!
-        Start typing below to see the output.
+        #  QA-RGCN
+        Please select a model
         """)
         model_selector = gr.Radio(choices=[None, *available_models], value=None, placeholder="Select the model you want to use")
-        # model_name_textbox = gr.Textbox(visible=False)
+
         question_selector = gr.Slider(interactive=True, visible=False)
 
         root_name_textbox = gr.Textbox(visible=False)
-        answers_names_selector = gr.Radio([], visible=False, interactive=True)
+        
         
         predict_button = gr.Button(value="Predict", variant="primary", visible=False)
-        # plot_button = gr.Button(value="Plot",  visible=False)
-        
         predictions_box = gr.Label(num_top_classes=10,  visible=False)
+        
+        answers_names_selector = gr.Radio([], visible=False, interactive=True)
+        explain_button = gr.Button(value="Plot",  visible=False)
+        
+        
         plot_box = gr.HTML()
 
         model_selector.change(fn=update_model, 
@@ -170,13 +228,13 @@ def main(cpu, ckpt_folder):
         predict_button.click(
             fn=predict, 
             inputs=question_selector,
-            outputs=[ predictions_box,plot_box]
+            outputs=[ predictions_box,plot_box, explain_button]
         )
-        # plot_button.click(
-        #     fn=plot, 
-        #     inputs=question_selector,
-        #     outputs=plot_box
-        # )
+        explain_button.click(
+            fn=explain, 
+            inputs=[question_selector, answers_names_selector],
+            outputs=plot_box
+        )
         
         
         

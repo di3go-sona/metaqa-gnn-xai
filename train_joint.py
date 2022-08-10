@@ -54,6 +54,7 @@ class JointQAModel(pl.LightningModule):
             
 
         # Rgcn
+        self.hops = kg_data.hops[-1]
         self.layers = len(hidden_sizes) + 1
         if fast:
             self.rgcn1 = torch_geometric.nn.conv.FastRGCNConv(emb_size, int(self.layers == 1) or hidden_sizes[0], kg_data.n_relations*2, aggr=aggr)
@@ -118,17 +119,17 @@ class JointQAModel(pl.LightningModule):
         x = ( nodes_mask * nodes_mask +  (1-nodes_mask) *  question_emb)
 
 
-        subset, _edge_index, inv, edge_mask = k_hop_subgraph(src_index.item(), 1, edge_index[:,[0,2]].T)
+        subset, _edge_index, inv, edge_mask = k_hop_subgraph(src_index.item(), self.hops, edge_index[:,[0,2]].T)
         _edge_type = edge_index[:,1][edge_mask]
         # print(x.shape, _edge_index.shape, _edge_type.shape  )
         z = self.rgcn1(x, _edge_index, _edge_type)
         
         if self.layers > 1 :
-            subset, _edge_index, inv, edge_mask = k_hop_subgraph(src_index.item(), 2, edge_index[:,[0,2]].T)
+            subset, _edge_index, inv, edge_mask = k_hop_subgraph(src_index.item(), self.hops, edge_index[:,[0,2]].T)
             _edge_type = edge_index[:,1][edge_mask]
             z = self.rgcn2(z.relu(), _edge_index, _edge_type)
         if self.layers > 2 :
-            subset, _edge_index, inv, edge_mask = k_hop_subgraph(src_index.item(), 3, edge_index[:,[0,2]].T)
+            subset, _edge_index, inv, edge_mask = k_hop_subgraph(src_index.item(), self.hops, edge_index[:,[0,2]].T)
             _edge_type = edge_index[:,1][edge_mask]
             z = self.rgcn3(z.relu(), _edge_index, _edge_type)
         
@@ -229,10 +230,10 @@ class JointQAModel(pl.LightningModule):
         return loss
     
     def forward(self, x, edge_index, src_idx, question, **kwargs ):
+
         triples = torch.stack((edge_index[0], kwargs['relations'] ,edge_index[1])).T
 
         qa_emb = self.encode_question(question)
-        # print(x.shape, question.shape, triples.shape)
         nodes_emb = self.encode_nodes(x,qa_emb, triples, src_idx, )
 
         scores = self.qa_interaction(nodes_emb[src_idx].unsqueeze(0), qa_emb, nodes_emb)
@@ -359,7 +360,7 @@ def train( emb_size, hidden_size, negs, lr, ntm, kge_train_batch_size, qa_train_
     qa_data = QAData('dataset', [hops], tokenizer, train_batch_size= qa_train_batch_size, val_batch_size= val_batch_size, use_ntm= ntm)
 
     hidden_size = [int(i) for i in hidden_size.split('|') ] if len (hidden_size) > 0 else []
-    model = JointQAModel(kge_data, emb_size, hidden_size, lr, negs, fast=fast, aggr=aggr)
+    model = JointQAModel(qa_data, emb_size, hidden_size, lr, negs, fast=fast, aggr=aggr)
 
     wandb.init( entity='link-prediction-gnn', project="metaqa-qa", reinit=True)
     logger = WandbLogger(log_model=True)
