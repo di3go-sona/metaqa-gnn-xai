@@ -392,7 +392,7 @@ class GNNExplainer(torch.nn.Module):
         else:
             # Only operate on a k-hop subgraph around `node_idx`.
             subset, edge_index, _, hard_edge_mask = k_hop_subgraph(
-                node_idx, self.num_hops, edge_index, relabel_nodes=True,
+                [node_idx, kwargs['root_idx']], self.num_hops, edge_index, relabel_nodes=True,
                 num_nodes=None, flow=self.__flow__())
 
         edge_mask = edge_mask[hard_edge_mask]
@@ -490,8 +490,8 @@ def run():
     explainer = GNNExplainer(model,
         epochs=100,
         return_type='raw',
-        feat_type='scalar',
-        num_hops=2,)
+        feat_type='feature',
+        num_hops=model.hops,)
 
     node_feat_mask, edge_mask = explainer.explain_node(dst_idx[ANSWER_ID], 
                                                     x,
@@ -500,7 +500,7 @@ def run():
                                                     src_idx= src_idx,
                                                     question= question)
 
-    #%%
+
     ax, G = explainer.visualize_subgraph(dst_idx[ANSWER_ID], index, edge_mask)
 
 

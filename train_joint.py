@@ -23,7 +23,6 @@ class JointQAModel(pl.LightningModule):
                  emb_size, 
                  hidden_sizes,
                  lr,
-                 num_negs_per_pos,
                  aggr = 'max',
                  bert_model = "prajjwal1/bert-mini",
                  fast = False) -> None:
@@ -31,10 +30,9 @@ class JointQAModel(pl.LightningModule):
         
 
         self.lr = lr
-        self.num_negs_per_pos = num_negs_per_pos
-        
-        self.qa_interaction = DistMultInteraction()
-        self.kge_interaction = TransEInteraction(1)
+
+        # self.qa_interaction = DistMultInteraction()
+        # self.kge_interaction = TransEInteraction(1)
         # self.loss_func = MarginRankingLoss(margin=1.0, reduction='mean')
         self.loss_func = torch.nn.CrossEntropyLoss()
 
@@ -47,53 +45,49 @@ class JointQAModel(pl.LightningModule):
         else:
             self.text_linear_emb = torch.nn.Identity()
             
-        # if self.text_model.config.hidden_size != hidden_sizes[-1]:
-        #     self.text_linear_out = torch.nn.Linear(self.text_model.config.hidden_size, hidden_sizes[-1])
-        # else:
-        #     self.text_linear_out = torch.nn.Identity()
-            
 
+        
         # Rgcn
         self.hops = kg_data.hops[-1]
         self.layers = len(hidden_sizes) + 1
         if fast:
-            self.rgcn1 = torch_geometric.nn.conv.FastRGCNConv(emb_size, int(self.layers == 1) or hidden_sizes[0], kg_data.n_relations*2, aggr=aggr)
+            self.rgcn1 = torch_geometric.nn.conv.FastRGCNConv(emb_size, int(self.layers == 1) or hidden_sizes[0], kg_data.n_relations*2, bias=False, aggr=aggr)
         else:
-            self.rgcn1 = torch_geometric.nn.conv.RGCNConv(emb_size, int(self.layers == 1) or hidden_sizes[0], kg_data.n_relations*2, aggr=aggr)
+            self.rgcn1 = torch_geometric.nn.conv.RGCNConv(emb_size, int(self.layers == 1) or hidden_sizes[0], kg_data.n_relations*2, bias=False, aggr=aggr)
         
         if self.layers > 1:
             if fast:
-                self.rgcn2 = torch_geometric.nn.conv.FastRGCNConv(hidden_sizes[0], int(self.layers == 2) or hidden_sizes[1], kg_data.n_relations*2, aggr=aggr)
+                self.rgcn2 = torch_geometric.nn.conv.FastRGCNConv(hidden_sizes[0], int(self.layers == 2) or hidden_sizes[1], kg_data.n_relations*2, bias=False, aggr=aggr)
             else:
-                self.rgcn2 = torch_geometric.nn.conv.RGCNConv(hidden_sizes[0], int(self.layers == 2) or hidden_sizes[1], kg_data.n_relations*2, aggr=aggr)
+                self.rgcn2 = torch_geometric.nn.conv.RGCNConv(hidden_sizes[0], int(self.layers == 2) or hidden_sizes[1], kg_data.n_relations*2, bias=False, aggr=aggr)
         if self.layers > 2:
             if fast:
-                self.rgcn3 = torch_geometric.nn.conv.FastRGCNConv(hidden_sizes[1], 1, kg_data.n_relations*2, aggr=aggr)
+                self.rgcn3 = torch_geometric.nn.conv.FastRGCNConv(hidden_sizes[1], 1, kg_data.n_relations*2, bias=False, aggr=aggr)
             else:
-                self.rgcn3 = torch_geometric.nn.conv.RGCNConv(hidden_sizes[1], 1, kg_data.n_relations*2, aggr=aggr)
+                self.rgcn3 = torch_geometric.nn.conv.RGCNConv(hidden_sizes[1], 1, kg_data.n_relations*2, bias=False, aggr=aggr)
             
         # Cache 
-        self._z_cache = (None, None)
-        self._q_cache = (None, None, None)
+        # self._z_cache = (None, None)
+        # self._q_cache = (None, None, None)
         
         # Edges and nodes
         self.edge_index = torch.nn.Parameter( kg_data.get_triples(), requires_grad = False)
         self.nodes_emb = Embedding(kg_data.n_nodes, emb_size)#, max_norm=1)
-        self.src_node_emb = torch.nn.Parameter(torch.rand( (emb_size,)))
+        # self.src_node_emb = torch.nn.Parameter(torch.rand( (emb_size,)))
         # self.relations_emb = Embedding(kg_data.n_relations, emb_size, max_norm=1)
         
-        self.score_nodes = torch.nn.Linear(hidden_sizes[-1] if self.layers > 1 else emb_size, 1)
+        # self.score_nodes = torch.nn.Linear(hidden_sizes[-1] if self.layers > 1 else emb_size, 1)
         
         # Samplers
-        self.qa_neg_sampler = BasicNegativeSampler(
-                                mapped_triples= self.edge_index,
-                                num_negs_per_pos= self.num_negs_per_pos,
-                                corruption_scheme= ('head',))
+        # self.qa_neg_sampler = BasicNegativeSampler(
+        #                         mapped_triples= self.edge_index,
+        #                         num_negs_per_pos= self.num_negs_per_pos,
+        #                         corruption_scheme= ('head',))
         
-        self.kge_neg_sampler = BasicNegativeSampler(
-                                mapped_triples= self.edge_index,
-                                num_negs_per_pos= self.num_negs_per_pos,
-                                corruption_scheme= ('head','tail'))
+        # self.kge_neg_sampler = BasicNegativeSampler(
+        #                         mapped_triples= self.edge_index,
+        #                         num_negs_per_pos= self.num_negs_per_pos,
+        #                         corruption_scheme= ('head','tail'))
         self.save_hyperparameters()
         
     @property
@@ -105,9 +99,13 @@ class JointQAModel(pl.LightningModule):
         return torch.tensor( self.nodes_emb.num_embeddings , dtype = torch.long, device = self.device)
     
     def get_name(self):
-        return f'{self.qa_interaction.__class__.__name__}|{self.nodes_emb.embedding_dim}'
+        return f'QA_RGCN'
         
-    def encode_nodes(self, x: torch.Tensor, question_emb, edge_index, src_index,):
+    def encode_nodes(self,
+                        x: torch.Tensor,
+                        question_emb: torch.Tensor,
+                        edge_index: torch.Tensor,
+                        src_index: int):
 
         if x is None:
             x = self.nodes_emb.weight.clone()
@@ -115,13 +113,16 @@ class JointQAModel(pl.LightningModule):
             edge_index = self.edge_index
         
 
-        nodes_mask = (torch.arange(self.nodes_emb.num_embeddings, device = self.device, requires_grad=False) == src_index).unsqueeze(-1).float()
-        x = ( nodes_mask * nodes_mask +  (1-nodes_mask) *  question_emb)
+        nodes_mask = (torch.arange(x.size(0), device = self.device, requires_grad=False) == src_index).unsqueeze(-1).float()
+        
 
+        # x =  (nodes_mask) * x +  (1-nodes_mask) * question_emb # reversed version
+        # x = (1-nodes_mask) * x +  (nodes_mask) * question_emb # normal version
+        x = (nodes_mask) * question_emb # zeroed out version
+        
 
         subset, _edge_index, inv, edge_mask = k_hop_subgraph(src_index.item(), self.hops, edge_index[:,[0,2]].T)
         _edge_type = edge_index[:,1][edge_mask]
-        # print(x.shape, _edge_index.shape, _edge_type.shape  )
         z = self.rgcn1(x, _edge_index, _edge_type)
         
         if self.layers > 1 :
@@ -136,29 +137,21 @@ class JointQAModel(pl.LightningModule):
         # self._z_cache = (cache_id, z)
         return z
     
-    def encode_question(self, question_toks, cache_id = None):
+    def encode_question(self, question_toks):
         ''' Encodes the text tokens, input should have shape (seq_len, batch_size), return has shape (batch_size, embedding_size)'''
-        old_cache_id, old_q_emb, old_q_out = self._q_cache
-        if cache_id is not None and cache_id == old_cache_id:
-            return old_q_emb, old_q_out
+        
         should_squeeze = False
         if question_toks.dim() == 1:
             should_squeeze = True
             question_toks = question_toks.unsqueeze(-1)
-        # print(question_toks.shape)
+            
         out = self.text_model(question_toks.T)
-
-        q_emb = self.text_linear_emb( out.last_hidden_state[:,0,:]) 
-        # q_emb = torch.nn.functional.normalize(q_emb, p=1.0, dim=-1)
-        # q_out = self.text_linear_out( out.last_hidden_state[:,0,:])
-        # q_out = torch.nn.functional.normalize(q_out, p=1.0, dim=-1)
+        out = self.text_linear_emb( out.last_hidden_state[:,0,:]) 
         
         if should_squeeze:
-            q_emb = q_emb.squeeze()
+            out = out.squeeze()
             
-        # print(q_emb.shape)
-        self._q_cache = (cache_id, q_emb, None)
-        return q_emb               
+        return out               
         
     def qa_forward(self, sources, questions):
         '''
@@ -234,10 +227,10 @@ class JointQAModel(pl.LightningModule):
         triples = torch.stack((edge_index[0], kwargs['relations'] ,edge_index[1])).T
 
         qa_emb = self.encode_question(question)
-        nodes_emb = self.encode_nodes(x,qa_emb, triples, src_idx, )
+        scores = self.encode_nodes(x,qa_emb, triples, src_idx, )
 
-        scores = self.qa_interaction(nodes_emb[src_idx].unsqueeze(0), qa_emb, nodes_emb)
-        return scores.unsqueeze(-1)
+        # scores = self.qa_interaction(nodes_emb[src_idx].unsqueeze(0), qa_emb, nodes_emb).unsqueeze(-1)
+        return scores
     
     def qa_validation_step(self, batches, batch_idx):
         res = []
@@ -341,7 +334,6 @@ from pytorch_lightning.trainer.supporters import CombinedLoader
 @click.command()
 @click.option('--emb-size', default=64, type=int)
 @click.option('--hidden-size', default='32', type=str)
-@click.option('--negs', default=1, type=int)
 @click.option('--lr', default=0.0001, type=float)
 @click.option('--ntm', default=False, is_flag=True)
 @click.option('--kge-train-batch-size', default=1024, type=int)
@@ -353,23 +345,24 @@ from pytorch_lightning.trainer.supporters import CombinedLoader
 @click.option('--hops', default=1, type=int)
 @click.option('--aggr', default='mean', type=str)
 @click.option('--fast', is_flag=True)
+@click.option('--patience', default=3, type=int)
 @click.option('--epochs', default=500, type=int)
-def train( emb_size, hidden_size, negs, lr, ntm, kge_train_batch_size, qa_train_batch_size, val_batch_size, accumulate_train_batches, limit_val_batches, limit_train_batches, hops, epochs, aggr, fast):
+def train( emb_size, hidden_size, lr, ntm, kge_train_batch_size, qa_train_batch_size, val_batch_size, accumulate_train_batches, limit_val_batches, limit_train_batches, hops, aggr, fast, patience, epochs):
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
     kge_data = EmbeddingsData('dataset', train_batch_size= kge_train_batch_size, val_batch_size= val_batch_size)
     qa_data = QAData('dataset', [hops], tokenizer, train_batch_size= qa_train_batch_size, val_batch_size= val_batch_size, use_ntm= ntm)
 
     hidden_size = [int(i) for i in hidden_size.split('|') ] if len (hidden_size) > 0 else []
-    model = JointQAModel(qa_data, emb_size, hidden_size, lr, negs, fast=fast, aggr=aggr)
+    model = JointQAModel(qa_data, emb_size, hidden_size, lr, fast=fast, aggr=aggr)
 
     wandb.init( entity='link-prediction-gnn', project="metaqa-qa", reinit=True)
     logger = WandbLogger(log_model=True)
                 
     checkpoint_callback = ModelCheckpoint(
         dirpath=f'checkpoints/qa/{hops}-hops/',
-        filename=f'{model.get_name()}|{emb_size}>{">".join([str(i) for i in hidden_size])}>1'+'|{epoch}'  
+        filename=f'{model.get_name()}|{">".join([str(i) for i in [emb_size, *hidden_size]])}>1'+'|{epoch}'  
         )  
-    stopping_callback = EarlyStopping(monitor="val/hits_at_1", min_delta=0.00, patience=3, verbose=False, mode="max")
+    stopping_callback = EarlyStopping(monitor="val/hits_at_1", min_delta=0.00, patience=patience, verbose=False, mode="max")
     
     trainer = pl.Trainer( 
         accelerator= 'gpu',

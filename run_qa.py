@@ -18,20 +18,17 @@ data = None
 device = None
 graph = None
 subgraph = None
+
+
 #%%
 # @click.command()
 # @click.option('--cpu', default=False, show_default=True, is_flag=True)
 # @click.option('--ckpt-folder', default='../checkpoints/*/*/*.ckpt', type=str)
-
-
 def main(cpu, ckpt_folder):
     global device
     
     device = 'cpu' if cpu else  'cuda:0'
-    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased", )
-    # model = JointQAModel.load_from_checkpoint(default_model, map_location={'cuda:0': device, 'cpu': device })
-
-    
+    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased", )    
     available_models = glob.glob(ckpt_folder)    
     
     def update_model(model_path):
@@ -59,25 +56,31 @@ def main(cpu, ckpt_folder):
         
         return  data_selector
 
-    def update_question(index):
+    def update_question(question_index):
         global model 
         global hops
         global data
         global device
-        print(index)
         
-        root, _, answers, question = data.val_ds_unflattened[int(index)]        
+        
+
+        
+        root, _, answers, question = data.val_ds_unflattened[int(question_index)]        
         root_name = data.entities_names[root]
         answers_names = [ data.entities_names[answer] for answer in answers ]
+        
+        index = model.edge_index.T[[0,2]].cpu()
+        relations = model.edge_index.T[1].cpu()
+        subset, index, inv, edge_mask = k_hop_subgraph(root, model.hops, index)
         question = data.tokenizer.decode(question).replace('root', root_name)
 
         question_selector = gr.Textbox.update(question, visible=True)
         answers_selector = gr.Radio.update(choices= answers_names, visible= True)
-        
         predict_button = gr.Button.update(visible= True)
-        # plot_button = gr.Button.update(visible= True)
+        xai_button = gr.Button.update(visible= False)
+        question_info = gr.Textbox.update(f"Nodes: {len(subset)}, Edges: {len(index)}", visible=True)
         
-        return question_selector, answers_selector, predict_button
+        return question_selector, answers_selector, predict_button, xai_button, question_info
     
     def predict(index):
         global data
@@ -141,12 +144,12 @@ def main(cpu, ckpt_folder):
         
         return predictions_box, f'''<iframe sandbox="allow-scripts" width="1100px" height="700px" srcdoc="{html}"></iframe>''', gr.Button.update(visible=True)
 
-    def explain(question_index, answer_name):
+    def explain(question_index, answer_name, xai_epochs, xai_mask_type):
         explainer = GNNExplainer(model,
-        epochs=300,
-        return_type='raw',
-        feat_type='scalar',
-        num_hops=model.hops)
+            epochs=int(xai_epochs),
+            return_type='raw',
+            feat_type=xai_mask_type,
+            num_hops=model.hops)
 
         root, _, answers, question = data.val_ds_unflattened[int(question_index)]        
         
@@ -155,10 +158,9 @@ def main(cpu, ckpt_folder):
 
 
         answer_index = data.entities_ids[answer_name]
-        
-                
         subset, index, inv, edge_mask = k_hop_subgraph(root, model.hops, index)
         relations = relations[edge_mask]
+        print(edge_mask)
         
         node_feat_mask, edge_mask = explainer.explain_node(answer_index, 
                                                         model.nodes_emb.weight.clone(),
@@ -167,7 +169,7 @@ def main(cpu, ckpt_folder):
                                                         src_idx= root,
                                                         question= question)
 
-        ax, G = explainer.visualize_subgraph(answer_index, index, edge_mask)
+        ax, G = explainer.visualize_subgraph(answer_index, index, edge_mask, root_idx=root)
 
 
         for n in G.nodes():
@@ -176,10 +178,10 @@ def main(cpu, ckpt_folder):
             if 'color' in subgraph.nodes[name]:
                 G.nodes[n]['color'] = subgraph.nodes[name]['color']
 
-        print(G.edges())
-        print(subgraph.edges())
+        # print(G.edges())
+        # print(subgraph.edges())
         for e in G.edges():
-            # name = tuple(data.entities_names[ei] for ei in e)
+            print(G.edges[e]['att'])
             G.edges[e]['color'] = '#' + hex(int((1-G.edges[e]['att'])*256))[2:] * 3
         
             
@@ -204,37 +206,43 @@ def main(cpu, ckpt_folder):
         question_selector = gr.Slider(interactive=True, visible=False)
 
         root_name_textbox = gr.Textbox(visible=False)
+        question_info_textbox = gr.Textbox(visible=False)
         
         
         predict_button = gr.Button(value="Predict", variant="primary", visible=False)
         predictions_box = gr.Label(num_top_classes=10,  visible=False)
         
-        answers_names_selector = gr.Radio([], visible=False, interactive=True)
-        explain_button = gr.Button(value="Plot",  visible=False)
+        xai_target_answer = gr.Radio([], visible=False, interactive=True, label='Xai Answer')
+        xai_epochs = gr.Slider(minimum=0, maximum=1000, value=300, label='Xai epochs')
+        xai_mask_type = gr.Radio(["feature", "individual_feature", "scalar"], label='Xai Mask Type')
+        xai_button = gr.Button(value="Explain",  visible=False)
         
         
         plot_box = gr.HTML()
 
-        model_selector.change(fn=update_model, 
-                inputs=model_selector, 
-                outputs=[question_selector],
-                )
+        model_selector.change(
+            fn=update_model, 
+            inputs=model_selector, 
+            outputs=[question_selector],
+            )
         
-        question_selector.change(fn=update_question, 
-                inputs=question_selector, 
-                outputs=[root_name_textbox, answers_names_selector, predict_button]
-                )
+        question_selector.change(
+            fn=update_question, 
+            inputs=question_selector, 
+            outputs=[root_name_textbox, xai_target_answer, predict_button, xai_button, question_info_textbox]
+            )
         
         predict_button.click(
-            fn=predict, 
-            inputs=question_selector,
-            outputs=[ predictions_box,plot_box, explain_button]
-        )
-        explain_button.click(
+            fn= predict, 
+            inputs= [ question_selector],
+            outputs=[ predictions_box, plot_box, xai_button]
+            )
+        
+        xai_button.click(
             fn=explain, 
-            inputs=[question_selector, answers_names_selector],
+            inputs=[question_selector, xai_target_answer, xai_epochs, xai_mask_type],
             outputs=plot_box
-        )
+            )
         
         
         
