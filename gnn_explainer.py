@@ -18,7 +18,7 @@ from torch_sparse import SparseTensor
 EPS = 1e-15
 
 
-class GNNExplainer(torch.nn.Module):
+class RGCNQAExplainer(GNNExplainer):
     r"""The GNN-Explainer model from the `"GNNExplainer: Generating
     Explanations for Graph Neural Networks"
     <https://arxiv.org/abs/1903.03894>`_ paper for identifying compact subgraph
@@ -62,31 +62,19 @@ class GNNExplainer(torch.nn.Module):
             settings in :attr:`~torch_geometric.nn.models.GNNExplainer.coeffs`.
     """
 
-    coeffs = {
-        'edge_size': 0.005,
-        'edge_reduction': 'sum',
-        'node_feat_size': 1.0,
-        'node_feat_reduction': 'mean',
-        'edge_ent': 1.0,
-        'node_feat_ent': 0.1,
-    }
-
     def __init__(self, model, epochs: int = 100, lr: float = 0.01,
                  num_hops: Optional[int] = None, return_type: str = 'log_prob',
                  feat_mask_type: str = 'feature', allow_edge_mask: bool = True,
                  log: bool = True, **kwargs):
-        super().__init__()
-        assert return_type in ['log_prob', 'prob', 'raw', 'regression']
-        assert feat_mask_type in ['feature', 'individual_feature', 'scalar']
-        self.model = model
-        self.epochs = epochs
-        self.lr = lr
-        self.__num_hops__ = num_hops
-        self.return_type = return_type
-        self.log = log
-        self.allow_edge_mask = allow_edge_mask
-        self.feat_mask_type = feat_mask_type
-        self.coeffs.update(kwargs)
+        super().__init__(model,
+                        epochs, 
+                        lr, 
+                        num_hops, 
+                        return_type, 
+                        feat_mask_type, 
+                        allow_edge_mask, 
+                        log, **kwargs)
+
 
     def __set_masks__(self, x, edge_index, init="normal"):
         (N, F), E = x.size(), edge_index.size(1)
@@ -143,9 +131,6 @@ class GNNExplainer(torch.nn.Module):
         return 'source_to_target'
 
     def __subgraph__(self, node_idx, x, edge_index, **kwargs):
-        # if isinstance( edge_index, SparseTensor ):
-        #     num_nodes, num_edges = x.size(0), edge_index.coo()[0].size(0)
-        # else:
         num_nodes, num_edges = x.size(0), edge_index.size(1)
         
         subset, edge_index, mapping, edge_mask = k_hop_subgraph(

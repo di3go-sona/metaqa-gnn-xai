@@ -145,9 +145,9 @@ def main(cpu, ckpt_folder):
         return predictions_box, f'''<iframe sandbox="allow-scripts" width="1100px" height="700px" srcdoc="{html}"></iframe>''', gr.Button.update(visible=True)
 
     def explain(question_index, answer_name, xai_epochs, xai_mask_type):
-        explainer = GNNExplainer(model,
+        explainer = RGCNQAExplainer(model,
             epochs=int(xai_epochs),
-            return_type='raw',
+            return_type='prob',
             feat_type=xai_mask_type,
             num_hops=model.hops)
 
