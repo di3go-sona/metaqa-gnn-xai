@@ -1,5 +1,5 @@
 #%%
-from train_joint import *
+from train import *
 from torch_geometric.nn import GCNConv, GNNExplainer
 
 
@@ -14,7 +14,7 @@ from tqdm import tqdm
 from torch_geometric.data import Data
 from torch_geometric.nn import MessagePassing
 from torch_geometric.utils import k_hop_subgraph, to_networkx
-from torch_sparse import SparseTensor
+
 EPS = 1e-15
 
 
@@ -457,7 +457,7 @@ def run():
 
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
 
-    model = JointQAModel.load_from_checkpoint(MODEL_PATH, fast=True)
+    model = QA_RGCN.load_from_checkpoint(MODEL_PATH, fast=True)
     qa_data = QAData('dataset', [model.hops], tokenizer, False)
 
     x = model.nodes_emb.weight

@@ -1,8 +1,6 @@
 #%%
-from re import sub
-import torch, transformers
-from train_joint import JointQAModel
-from train_qa import QAModel, QAData
+import torch
+from train import QA_RGCN, QAData
 from transformers import AutoTokenizer, BertModel
 import click, os, glob
 import gradio as gr
@@ -38,7 +36,7 @@ def main(cpu, ckpt_folder):
         global device
         global graph
         
-        model = JointQAModel.load_from_checkpoint(model_path, map_location={'cuda:0': device, 'cpu': device })
+        model = QA_RGCN.load_from_checkpoint(model_path, map_location={'cuda:0': device, 'cpu': device })
         
         if data is None or hops !=  int (model_path.rsplit('/', 2)[1][0]):
             hops = int (model_path.rsplit('/', 2)[1][0])
@@ -88,13 +86,15 @@ def main(cpu, ckpt_folder):
         global subgraph
         
         root, _, answers, question = data.val_ds_unflattened[int(index)]        
-        preds = model.qa_validation_step(
-            {'inference': 
-                (torch.tensor(root, dtype=int, device=device).unsqueeze(-1), 
-                torch.tensor(answers, dtype=int, device=device).unsqueeze(-1), 
-                question.to(device).unsqueeze(-1)
-                )
-                }, -1)
+        preds = model.validation_step(
+            {'qa':
+                {'inference': 
+                    (torch.tensor(root, dtype=int, device=device).unsqueeze(-1), 
+                    torch.tensor(answers, dtype=int, device=device).unsqueeze(-1), 
+                    question.to(device).unsqueeze(-1)
+                    )
+                    }
+            }, -1)
         scores, topk = next(iter(preds))
         
         preds =  dict(
@@ -163,7 +163,7 @@ def main(cpu, ckpt_folder):
         print(edge_mask)
         
         node_feat_mask, edge_mask = explainer.explain_node(answer_index, 
-                                                        model.nodes_emb.weight.clone(),
+                                                        model.nodes_emb.clone(),
                                                         index,
                                                         relations= relations,
                                                         src_idx= root,
