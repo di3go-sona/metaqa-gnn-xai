@@ -11,6 +11,7 @@ from transformers import AutoTokenizer, BertModel
 import torch_geometric
 from torch_geometric.utils import k_hop_subgraph
 from torch_geometric.nn.conv import RGCNConv, FastRGCNConv
+from utils import get_model_path
 
 #%%
 class QA_RGCN(pl.LightningModule):
@@ -25,7 +26,8 @@ class QA_RGCN(pl.LightningModule):
                  zeroed_nodes,
                  aggr,
                  bert_model,
-                 fast) -> None:
+                 fast, 
+                 concat_layers=False) -> None:
         super().__init__()
         
         assert(len(layer_sizes) > 0)
@@ -43,6 +45,7 @@ class QA_RGCN(pl.LightningModule):
         self.emb_size = self.layers[0]
         self.n_nodes  = kg_data.n_nodes
         self.hops = kg_data.hops[-1]
+        self.concat_layers = concat_layers
         
         
         self.loss_func = torch.nn.CrossEntropyLoss()
@@ -82,7 +85,9 @@ class QA_RGCN(pl.LightningModule):
                 self.rgcn3 = RGCNConv(self.layers[2], self.layers[3], kg_data.n_relations*2, bias=False, num_bases= self.decompose and kg_data.n_relations, aggr=aggr)
         
         # if Rgcn last layer size is different from 1 then insert an intermediate linear layer
-        if self.layers[-1] != 1:
+        if self.concat_layers:
+            self.rgcn_head = torch.nn.Linear(sum(self.layers), 1)    
+        elif self.layers[-1] != 1:
             self.rgcn_head = torch.nn.Linear(self.layers[-1], 1)    
         else:
             self.rgcn_head = torch.nn.Identity()
@@ -97,6 +102,8 @@ class QA_RGCN(pl.LightningModule):
         name = 'QA_RGCN'
         name += f'|{self.hops}_hops'
         name += '|'+'>'.join([str(i) for i in self.layers])
+        if self.concat_layers:
+            name += 'C'
         name += f'|lr={self.lr}'
         name += f'|l2={self.l2}'
         name += f'|{self.aggr}_pool'
@@ -126,26 +133,42 @@ class QA_RGCN(pl.LightningModule):
         if edge_index is None:
             edge_index = self.edge_index
         
+        
         # Compute a binary mask with all zeros except the src node index
         src_index_mask = (torch.arange(x.size(0), device = self.device, requires_grad=False) == src_index).unsqueeze(-1).float()
         # Sum question to x
         z = x + (src_index_mask * question_emb )
+        if self.concat_layers:
+            layers = [z]
 
 
         subset, _edge_index, inv, edge_mask = k_hop_subgraph(src_index.item(), self.hops, edge_index[:,[0,2]].T)
         _edge_type = edge_index[:,1][edge_mask]
         
+        
         if self.n_layers > 1:
             z = self.rgcn1(z, _edge_index, _edge_type)
+            if self.concat_layers:
+                layers.append(z)
         
         if self.n_layers > 2 :
             z = self.rgcn2(z.relu(), _edge_index, _edge_type)
+            if self.concat_layers:
+                layers.append(z)
             
         if self.n_layers > 3 :
             z = self.rgcn3(z.relu(), _edge_index, _edge_type)
+            if self.concat_layers:
+                layers.append(z)
         
-        z = self.rgcn_head(z)
-        return z
+        if self.concat_layers:
+            out = self.rgcn_head(
+                torch.concat( layers, -1)
+            )
+        else:
+            out = self.rgcn_head(z)
+            
+        return out
     
     def _encode_question(self, question_toks):
         ''' Encodes the text tokens, input should have shape (seq_len, batch_size), return has shape (batch_size, embedding_size)'''
@@ -273,6 +296,7 @@ from pytorch_lightning.trainer.supporters import CombinedLoader
 
 @click.command()
 @click.option('--layer-sizes', default='18|18|18', type=str)
+@click.option('--concat-layers', is_flag=True)
 @click.option('--decompose', default=False, is_flag=True)
 @click.option('--lr', default=0.01, type=float)
 @click.option('--l2', default=0.1, type=float)
@@ -291,14 +315,22 @@ from pytorch_lightning.trainer.supporters import CombinedLoader
 @click.option('--bert-model', default='prajjwal1/bert-mini', type=str)
 @click.option('--patience', default=3, type=int)
 @click.option('--epochs', default=10000, type=int)
-def train( layer_sizes, decompose, lr, l2, bias, root, zeroed, ntm, train_batch_size, val_batch_size, accumulate_batches, limit_val_batches, limit_train_batches, hops, aggr, fast, bert_model, patience, epochs):
+@click.option('--resume-id', type=str)
+def train( layer_sizes, concat_layers, decompose, lr, l2, bias, root, zeroed, ntm, train_batch_size, val_batch_size, accumulate_batches, limit_val_batches, limit_train_batches, hops, aggr, fast, bert_model, patience, epochs, resume_id):
     layer_sizes = [int(i) for i in layer_sizes.split('|') ] if len (layer_sizes) > 0 else []
 
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+    
+    
     qa_data = QAData('dataset', [hops], tokenizer, train_batch_size= train_batch_size, val_batch_size= val_batch_size, use_ntm= ntm)
-    model = QA_RGCN(qa_data, layer_sizes, decompose, lr, l2, bias, root, zeroed, aggr, bert_model, fast)
-
-    wandb.init( name=model.get_name(), entity='link-prediction-gnn', project="metaqa-qa", reinit=True)
+    model = None
+    if resume_id:
+        run = wandb.init( id=resume_id, entity='link-prediction-gnn', project="metaqa-qa",  resume='must')
+        model = QA_RGCN.load_from_checkpoint(get_model_path(run.name))
+    else:
+        model = QA_RGCN(qa_data, layer_sizes, decompose, lr, l2, bias, root, zeroed, aggr, bert_model, fast, concat_layers)
+        run = wandb.init( name=model.get_name(), entity='link-prediction-gnn', project="metaqa-qa", reinit=True)
+    
     logger = WandbLogger( log_model=True)
                 
     checkpoint_callback = ModelCheckpoint(
@@ -306,6 +338,10 @@ def train( layer_sizes, decompose, lr, l2, bias, root, zeroed, ntm, train_batch_
         filename=model.get_name()+'|{epoch}'  
         )  
     stopping_callback = EarlyStopping(monitor="val/hits_at_1", min_delta=0.00, patience=patience, verbose=False, mode="max")
+    
+    # additional_arg[] = {
+    #     'ckpt_path': get_model_path(run.name) 
+    # } if resume_id else {}
     
     trainer = pl.Trainer( 
         accelerator= 'gpu',
@@ -318,7 +354,8 @@ def train( layer_sizes, decompose, lr, l2, bias, root, zeroed, ntm, train_batch_
         accumulate_grad_batches= accumulate_batches,
         val_check_interval= 1.0, 
         check_val_every_n_epoch= 1,
-        max_epochs= epochs)
+        max_epochs= epochs,
+        )
     
     train_loader = CombinedLoader(
         {
@@ -331,9 +368,11 @@ def train( layer_sizes, decompose, lr, l2, bias, root, zeroed, ntm, train_batch_
         }, 'max_size_cycle'
     )
     
+    
     trainer.fit(model, 
                 train_dataloaders= train_loader, 
-                val_dataloaders= val_loader)
+                val_dataloaders= val_loader,
+                )
     wandb.finish()
     
 if __name__ == '__main__':

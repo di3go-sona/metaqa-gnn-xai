@@ -1,4 +1,5 @@
 #%%
+from email.policy import default
 from dataset.dataloaders import EmbeddingsData
 from pykeen.nn.modules import DistMultInteraction, ComplExInteraction, TransEInteraction
 from pykeen.sampling import BasicNegativeSampler
@@ -29,7 +30,7 @@ class KGEModel(pl.LightningModule):
             self.interaction = TransEInteraction(2)
         else:
             raise Exception(f'Unknow interaction {interaction}')
-        self.neg_sampler = BasicNegativeSampler(mapped_triples=torch.tensor(kg_data.triplets), num_negs_per_pos=negs)
+        self.neg_sampler = BasicNegativeSampler(mapped_triples=torch.tensor(kg_data.get_triples()), num_negs_per_pos=negs)
         self.loss_func = MarginRankingLoss(margin=1.0, reduction='mean')
         
         self.nodes_emb = Embedding(kg_data.n_nodes, emb_size, max_norm=1)
@@ -112,10 +113,10 @@ class KGEModel(pl.LightningModule):
 # %%  
 import click
 @click.command()
-@click.option('--emb-size' , default=100, type=int)
-@click.option('--interaction', type=str, )
+@click.option('--emb-size' , default=32, type=int)
+@click.option('--interaction', type=str, default='transe')
 @click.option('--lr', default=0.0001, type=float)
-@click.option('--negs', default=10, type=int)
+@click.option('--negs', default=32, type=int)
 @click.option('--train-batch-size', default=4096, type=int)
 @click.option('--val-batch-size', default=64, type=int)
 @click.option('--limit-val-batches', default=100, type=int)
@@ -139,7 +140,7 @@ def train(emb_size, interaction, negs, lr, train_batch_size, val_batch_size, lim
         callbacks= [embeddings_checkpoint_callback],
         logger= logger, 
         log_every_n_steps= 10,
-        check_val_every_n_epoch= 10,
+        check_val_every_n_epoch= 100,
         limit_val_batches=limit_val_batches,
         max_epochs=epochs)
     
@@ -150,3 +151,4 @@ def train(emb_size, interaction, negs, lr, train_batch_size, val_batch_size, lim
 # %%
 if __name__ == '__main__':
     train()
+# %%

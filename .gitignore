@@ -4,6 +4,7 @@ checkpoints/
 venv/
 __pycache__/
 *.cache
+*.pickle
 dataset/
 lightning_logs/
 .vscode

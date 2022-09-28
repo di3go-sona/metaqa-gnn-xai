@@ -144,12 +144,22 @@ def main(cpu, ckpt_folder):
         
         return predictions_box, f'''<iframe sandbox="allow-scripts" width="1100px" height="700px" srcdoc="{html}"></iframe>''', gr.Button.update(visible=True)
 
-    def explain(question_index, answer_name, xai_epochs, xai_mask_type):
+    def explain(question_index, answer_name, xai_epochs, xai_mask_type, xai_lr, xai_edge_size, xai_node_feat_size, xai_edge_ent, xai_node_feat_ent):
+        if not answer_name:
+            return None
         explainer = RGCNQAExplainer(model,
             epochs=int(xai_epochs),
+            lr=xai_lr,
             return_type='prob',
             feat_type=xai_mask_type,
-            num_hops=model.hops)
+            num_hops=model.hops,
+            **{
+                'xai_edge_size':xai_edge_size,
+                'xai_node_feat_size':xai_node_feat_size,
+                'xai_edge_ent':xai_edge_ent,
+                'xai_node_feat_ent':xai_node_feat_ent
+                })
+
 
         root, _, answers, question = data.val_ds_unflattened[int(question_index)]        
         
@@ -213,10 +223,16 @@ def main(cpu, ckpt_folder):
         predictions_box = gr.Label(num_top_classes=10,  visible=False)
         
         xai_target_answer = gr.Radio([], visible=False, interactive=True, label='Xai Answer')
-        xai_epochs = gr.Slider(minimum=0, maximum=1000, value=300, label='Xai epochs')
-        xai_mask_type = gr.Radio(["feature", "individual_feature", "scalar"], label='Xai Mask Type')
+        xai_epochs = gr.Slider(minimum=0, maximum=10000, value=300, label='Xai epochs')
+        xai_mask_type = gr.Radio(["scalar", "feature", "individual_feature" ], label='Xai Mask Type')
         xai_button = gr.Button(value="Explain",  visible=False)
         
+        xai_lr = gr.Number(value= 0.01, log=True, label='xai_edge_lr')
+        xai_edge_size = gr.Slider(minimum=0,  maximum=1, value= 0.005, label='xai_edge_size')
+        xai_node_feat_size = gr.Slider(minimum=0, maximum=1,  value= 1.0, label='xai_node_feat_size')
+
+        xai_edge_ent = gr.Slider(minimum=0, maximum=1,  value= 1.0, label='xai_edge_ent')
+        xai_node_feat_ent = gr.Slider(minimum=0, maximum=1,  value= 0.1, label='xai_node_feat_ent')
         
         plot_box = gr.HTML()
 
@@ -240,7 +256,7 @@ def main(cpu, ckpt_folder):
         
         xai_button.click(
             fn=explain, 
-            inputs=[question_selector, xai_target_answer, xai_epochs, xai_mask_type],
+            inputs=[question_selector, xai_target_answer, xai_epochs, xai_mask_type, xai_lr, xai_edge_size, xai_node_feat_size, xai_edge_ent, xai_node_feat_ent],
             outputs=plot_box
             )
         
