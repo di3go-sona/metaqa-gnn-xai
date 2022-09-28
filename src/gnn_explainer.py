@@ -3,7 +3,7 @@ from train import *
 from models.rgcnqa_explainer import RGCNQAExplainer
 
 
-MODEL_PATH = 'checkpoints/qa/2-hops/DistMultInteraction|64|64>32>1|epoch=13.ckpt'
+MODEL_PATH = '../data/checkpoints/qa/2-hops/QA_RGCN|2_hops|36>36>36|lr=0.0001|l2=0.0|mean_pool|zeroed|no_root|epoch=279.ckpt'
 QUESTION_ID = 3253
 ANSWER_ID = 0
 

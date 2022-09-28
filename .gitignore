@@ -1,13 +1,4 @@
-wandb/
-metaqa/
-checkpoints/
-venv/
+data/
 __pycache__/
-*.cache
-*.pickle
-dataset/
-lightning_logs/
-.vscode
-
-params.txt
 .python-version
+.vscode

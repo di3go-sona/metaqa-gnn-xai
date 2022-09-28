@@ -1,13 +1,87 @@
        
 import torch, pytorch_lightning as pl
-import sys
-
-from .GraphEncoder import * 
-from .GraphDecoders import *
- 
 from datetime import datetime
 
+import torch
 
+import torch 
+
+class TransEDecoder(torch.nn.Module):
+    def __init__(self, margin=1.0) -> None:
+        super().__init__()
+        self.criterion = torch.nn.MarginRankingLoss(margin=margin)
+    
+    def loss(self, positive_triplets, negative_triplets):
+
+        positive_distances = self._distance(positive_triplets)
+        negative_distances = self._distance(negative_triplets)
+        
+        target = torch.tensor([-1], dtype=torch.long, device=positive_triplets.device)
+
+        return self.criterion(positive_distances, negative_distances, target)
+
+    
+    def _distance(self, triplets):
+        """Triplets should have shape Bx3 where dim 3 are head id, relation id, tail id."""
+        # assert triplets.size()[1] == 3
+        src, dst, type = triplets
+
+        return (dst + type - src).norm(p=1, dim=1)
+    
+    def forward(self, triplets,):
+        return self._distance(triplets)
+            
+
+
+    
+class DistMultDecoder(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.criterion = torch.nn.BCEWithLogitsLoss()
+    
+    def loss(self, positive_triplets, negative_triplets):
+        z = self.forward(positive_triplets)
+        nz = self.forward(negative_triplets)
+        return self.criterion(z, torch.ones_like(z)) + self.criterion(nz, torch.zeros_like(nz))
+        
+    def forward(self, triplets,):
+        # print(triplets.shape)
+        src, dst, type = triplets
+        return (src*type*dst).sum(-1)
+    
+
+class GraphEncoder(torch.nn.Module):
+    def __init__(self, n_nodes, n_rels, embeddings_size) -> None:
+        super().__init__()
+        
+        # self.n_embeddings = n_embeddings
+        # self.embeddings_size = embeddings_size
+        
+        self.nodes_embeddings = torch.nn.Embedding(n_nodes, embeddings_size )
+        self.rels_embeddings = torch.nn.Embedding(n_rels, embeddings_size )
+
+        
+    def forward(self, X):
+        src, dst, rels = X
+        return torch.cat((
+            self.nodes_embeddings(src).unsqueeze(0),
+            self.nodes_embeddings(dst).unsqueeze(0),
+            self.rels_embeddings(rels).unsqueeze(0)
+        ), 0)
+        
+    @property
+    def n_nodes(self):
+        return self.nodes_embeddings.num_embeddings
+        
+    @property
+    def n_relations(self):
+        return self.rels_embeddings.num_embeddings 
+        
+    @property
+    def embeddings_size(self):
+        return self.nodes_embeddings.embedding_dim 
+    
+    
 class EmbeddingsModel(pl.LightningModule):
     def __init__(self, n_nodes: int, n_relations: int, config: dict ) -> None:
         super().__init__()

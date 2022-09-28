@@ -1,5 +1,5 @@
 #%%
-from dataset.dataloaders import EmbeddingsData, QAData
+from src.dataloaders import EmbeddingsData, QAData
 
 import wandb, torch
 import pytorch_lightning as pl

@@ -245,7 +245,7 @@ class MetaQaEmbeddings(LightningDataModule):
         return DataLoader(self.ds, self.val_batch_size or self.batch_size, shuffle=True)
         
 class MetaQa(LightningDataModule):
-    path = 'data/MetaQa.cache'
+
     def __init__(self, hops, batch_size, max_pos=1, neg_ratio=10, max_question_toks=32,  strip_root=True):
         super().__init__()
         self.qa_data = {}
