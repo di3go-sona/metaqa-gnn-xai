@@ -3,7 +3,7 @@ from train import *
 from models.rgcnqa_explainer import RGCNQAExplainer
 
 
-MODEL_PATH = '../data/checkpoints/qa/2-hops/QA_RGCN|2_hops|36>36>36|lr=0.0001|l2=0.0|mean_pool|zeroed|no_root|epoch=279.ckpt'
+MODEL_PATH = '../data/checkpoints/qa/2-hops/RGCNQA|2_hops|36>36>36|lr=0.0001|l2=0.0|mean_pool|zeroed|no_root|epoch=279.ckpt'
 QUESTION_ID = 3253
 ANSWER_ID = 0
 
@@ -11,8 +11,8 @@ def run():
 
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
 
-    model = QA_RGCN.load_from_checkpoint(MODEL_PATH, fast=True)
-    qa_data = QAData('dataset', [model.hops], tokenizer, False)
+    model = RGCNQA.load_from_checkpoint(MODEL_PATH, fast=True)
+    qa_data = QAData('../data/metaqa', [model.hops], tokenizer, False)
 
     x = model.nodes_emb.weight
     src_idx, _, dst_idx, question = qa_data.val_ds_unflattened[QUESTION_ID]

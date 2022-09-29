@@ -1,5 +1,5 @@
 #%%
-from train import QA_RGCN, QAData, AutoTokenizer
+from train import RGCNQA, QAData, AutoTokenizer
 from torch_geometric.utils import k_hop_subgraph
 from tqdm import tqdm
 

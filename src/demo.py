@@ -1,6 +1,6 @@
 #%%
 import torch
-from train import QA_RGCN, QAData
+from train import RGCNQA, QAData
 from transformers import AutoTokenizer, BertModel
 import click, os, glob
 import gradio as gr
@@ -36,7 +36,7 @@ def main(cpu, ckpt_folder):
         global device
         global graph
         
-        model = QA_RGCN.load_from_checkpoint(model_path, map_location={'cuda:0': device, 'cpu': device })
+        model = RGCNQA.load_from_checkpoint(model_path, map_location={'cuda:0': device, 'cpu': device })
         
         if data is None or hops !=  int (model_path.rsplit('/', 2)[1][0]):
             hops = int (model_path.rsplit('/', 2)[1][0])
