@@ -1,10 +1,12 @@
 
 import torch
-from transformers import AutoTokenizer, BertModel
+import  pytorch_lightning as pl
+from transformers import BertModel
 from torch_geometric.utils import k_hop_subgraph
 from torch_geometric.nn.conv import RGCNConv, FastRGCNConv
 
 from dataloaders import QAData
+
 #%%
 class RGCNQA(pl.LightningModule):
     def __init__(self, 
@@ -13,14 +15,15 @@ class RGCNQA(pl.LightningModule):
                  decompose,
                  lr,
                  l2,
-                 bias,
                  root,
                  zeroed_nodes,
                  aggr,
                  bert_model,
                  fast, 
-                 concat_layers=False,
-                 concat_embeddings=None) -> None:
+                 bias=False,
+                 concat_layers = False,
+                 concat_embeddings = None,
+                 embeddings_model = None) -> None:
         super().__init__()
         
         assert(len(layer_sizes) > 0)
@@ -41,6 +44,7 @@ class RGCNQA(pl.LightningModule):
         self.concat_layers = concat_layers
         self.concat_embeddings = concat_embeddings
         
+        self.embeddings_model = embeddings_model
         
         self.loss_func = torch.nn.CrossEntropyLoss()
 
@@ -59,42 +63,57 @@ class RGCNQA(pl.LightningModule):
             self.nodes_emb =  torch.nn.Parameter( torch.zeros(self.n_nodes, self.emb_size), requires_grad=False )
         else: 
             self.nodes_emb = torch.nn.Parameter( torch.randn(self.n_nodes, self.emb_size) )
-            
+        
+        if embeddings_model:
+            self.nodes_pretrained_emb = embeddings_model.nodes_emb.weight
+        
         if self.n_layers > 1:
             size_in = self.layers[0]
             size_out = self.layers[1]
-            if self.concat_embeddings == 'all' or self.concat_embeddings == 'first':
-                pass
+            if concat_embeddings in ['all', 'all+head', 'first', ]:
+                size_in += self.nodes_pretrained_emb.size(-1)
             if fast:
-                self.rgcn1 = FastRGCNConv(size_in, size_out, kg_data.n_relations*2, bias=False, num_bases= self.decompose and kg_data.n_relations, aggr=aggr)
+                self.rgcn1 = FastRGCNConv(size_in, size_out, kg_data.n_relations*2, bias=bias, num_bases= self.decompose and kg_data.n_relations, aggr=aggr)
             else:
-                self.rgcn1 = RGCNConv(size_in, size_out, kg_data.n_relations*2, bias=False, num_bases= self.decompose and kg_data.n_relations, aggr=aggr)
+                self.rgcn1 = RGCNConv(size_in, size_out, kg_data.n_relations*2, bias=bias, num_bases= self.decompose and kg_data.n_relations, aggr=aggr)
             
         if self.n_layers > 2:
             size_in = self.layers[1]
             size_out = self.layers[2]
-            if self.concat_embeddings == 'all' :
-                pass
+            if self.concat_embeddings in ['all', 'all+head']:
+                size_in += self.nodes_pretrained_emb.size(-1)
             if fast:
-                self.rgcn2 = FastRGCNConv(size_in, size_out, kg_data.n_relations*2, bias=False, num_bases= self.decompose and kg_data.n_relations, aggr=aggr)
+                self.rgcn2 = FastRGCNConv(size_in, size_out, kg_data.n_relations*2, bias=bias, num_bases= self.decompose and kg_data.n_relations, aggr=aggr)
             else:
-                self.rgcn2 = RGCNConv(size_in, size_out, kg_data.n_relations*2, bias=False, num_bases= self.decompose and kg_data.n_relations, aggr=aggr)
+                self.rgcn2 = RGCNConv(size_in, size_out, kg_data.n_relations*2, bias=bias, num_bases= self.decompose and kg_data.n_relations, aggr=aggr)
         
         if self.n_layers > 3:
             size_in = self.layers[2]
             size_out = self.layers[3]
-            if self.concat_embeddings == 'all' :
-                pass
+            if self.concat_embeddings in ['all', 'all+head']:
+                size_in += self.nodes_pretrained_emb.size(-1)
             if fast:
-                self.rgcn3 = FastRGCNConv(size_in, size_out, kg_data.n_relations*2, bias=False, num_bases= self.decompose and kg_data.n_relations, aggr=aggr)
+                self.rgcn3 = FastRGCNConv(size_in, size_out, kg_data.n_relations*2, bias=bias, num_bases= self.decompose and kg_data.n_relations, aggr=aggr)
             else:
-                self.rgcn3 = RGCNConv(size_in, size_out, kg_data.n_relations*2, bias=False, num_bases= self.decompose and kg_data.n_relations, aggr=aggr)
+                self.rgcn3 = RGCNConv(size_in, size_out, kg_data.n_relations*2, bias=bias, num_bases= self.decompose and kg_data.n_relations, aggr=aggr)
         
         # if Rgcn last layer size is different from 1 then insert an intermediate linear layer
         if self.concat_layers:
-            self.rgcn_head = torch.nn.Linear(sum(self.layers), 1)    
+            if self.concat_embeddings in ['head', 'all+head']:
+                self.rgcn_head = torch.nn.Linear(
+                    sum(self.layers)
+                    + 
+                    self.nodes_pretrained_emb.size(-1), 1)  
+            else:
+                self.rgcn_head = torch.nn.Linear(sum(self.layers), 1)  
         elif size_out != 1:
-            self.rgcn_head = torch.nn.Linear(size_out, 1)    
+            if self.concat_embeddings in ['head', 'all+head']:
+                self.rgcn_head = torch.nn.Linear(
+                    self.layers[-1]
+                    + 
+                    self.nodes_pretrained_emb.size(-1), 1)  
+            else:
+                self.rgcn_head = torch.nn.Linear (self.layers[-1], 1) 
         else:
             self.rgcn_head = torch.nn.Identity()
             
@@ -121,7 +140,8 @@ class RGCNQA(pl.LightningModule):
             name += '|no_root'
         if  self.decompose:
             name += '|decomposed'
-
+        if  self.concat_embeddings:
+            name += f'|concat={self.concat_embeddings}'
         return name
     
     def on_fit_start(self) -> None:
@@ -147,26 +167,39 @@ class RGCNQA(pl.LightningModule):
         if self.concat_layers:
             layers = [z]
 
-
-        subset, _edge_index, inv, edge_mask = k_hop_subgraph(src_index.item(), self.hops, edge_index[:,[0,2]].T)
+        if  isinstance(src_index, torch.Tensor):
+            src_index = src_index.item()
+        subset, _edge_index, inv, edge_mask = k_hop_subgraph(src_index, self.hops, edge_index[:,[0,2]].T)
         _edge_type = edge_index[:,1][edge_mask]
-        
-        
+
+
         if self.n_layers > 1:
+
+            if  self.concat_embeddings in ['all', 'all+head', 'first'] and self.layers[0] != 1:
+                z = torch.concat( [z, self.nodes_pretrained_emb], axis=-1)
+
             z = self.rgcn1(z, _edge_index, _edge_type)
+
             if self.concat_layers:
                 layers.append(z)
         
         if self.n_layers > 2 :
+            if self.concat_embeddings in ['all', 'all+head'] and self.layers[1] != 1:
+                z = torch.concat( [z, self.nodes_pretrained_emb], axis=-1)
             z = self.rgcn2(z.relu(), _edge_index, _edge_type)
             if self.concat_layers:
                 layers.append(z)
             
         if self.n_layers > 3 :
+            if self.concat_embeddings in ['all', 'all+head'] and self.layers[2] != 1:
+                z = torch.concat( [z, self.nodes_pretrained_emb], axis=-1)
             z = self.rgcn3(z.relu(), _edge_index, _edge_type)
             if self.concat_layers:
                 layers.append(z)
         
+        if self.concat_embeddings in ['head', 'all+head']:
+            z = torch.concat( [z, self.nodes_pretrained_emb], axis=-1)
+            
         if self.concat_layers:
             out = self.rgcn_head(
                 torch.concat( layers, -1)
@@ -231,12 +264,12 @@ class RGCNQA(pl.LightningModule):
         
         return loss
     
-    def forward(self, x, edge_index, src_idx, question, **kwargs ):
+    def forward(self, x, edge_index,  **kwargs ):
 
         triples = torch.stack((edge_index[0], kwargs['relations'] ,edge_index[1])).T
 
-        qa_emb = self._encode_question(question)
-        scores = self._encode_nodes(x,qa_emb, triples, src_idx, )
+        qa_emb = self._encode_question(kwargs['question'])
+        scores = self._encode_nodes(x,qa_emb, triples, kwargs['src_idx'], )
 
         return scores
     
@@ -262,12 +295,33 @@ class RGCNQA(pl.LightningModule):
                     
                     perc_hits = hits / count
                     self.log(f'{batch_type}/hits_at_{k}', perc_hits, on_epoch=True)
-                    
         return res
+    
+    def evaluate_batch(self, batch, k=1):
+        src, true_targets_list, questions =  batch
+        
+        # forward model
+        scores = self.qa_forward(src,  questions)
+        
+        topk = scores.topk(100, dim=-1)
+
+        # print(src.shape, true_targets_list.shape, questions.shape)
+        
+        for true_indices, topk_indices in zip(true_targets_list.T, topk.indices):
+            
+            # print(true_indices[true_indices>0].shape, topk_indices.shape)
+
+
+            hits = torch.isin(topk_indices[:k], true_indices).sum().item()
+            count = min(k, (true_indices > -1).sum().item())
+            
+            perc_hits = hits / count
+            yield perc_hits
 
     def configure_optimizers(self):
         freeze = [ 
                   'nodes_emb'
+                  'text_model'
                   ] if self.zeroed else []
 
         no_norm = [
@@ -295,3 +349,5 @@ class RGCNQA(pl.LightningModule):
                 )
                 
         return torch.optim.Adam(params, lr=self.lr)
+
+# %%

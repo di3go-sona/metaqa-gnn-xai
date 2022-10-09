@@ -3,7 +3,7 @@ import re
 import torch, os
 import pytorch_lightning as pl
 
-from globals import *
+
 from tqdm import tqdm 
 from torch.utils.data import DataLoader
 from pytorch_lightning.trainer.supporters import CombinedLoader
@@ -70,17 +70,17 @@ class EmbeddingsData(pl.LightningDataModule):
         self.val_batch_size = val_batch_size
         self.path = path
         
-        with open(os.path.join(METAQA_PATH,'kb_entity_dict.txt')) as fin:
+        with open(os.path.join(path,'kb_entity_dict.txt')) as fin:
             entities = [ l.strip().split('\t') for l in fin.readlines()]
             self.entities_names = dict([ (int(k), v) for k,v in entities])
             self.entities_ids = dict([ ( v, int(k)) for k,v in entities])
             
-        with open(os.path.join(METAQA_PATH,'kb_relations_dict.txt')) as fin:
+        with open(os.path.join(path,'kb_relations_dict.txt')) as fin:
             relations = [ l.strip().split('\t') for l in fin.readlines()]
             self.relations_names = dict([ (int(k), v) for k,v in relations])
             self.relations_ids = dict([ ( v, int(k)) for k,v in relations])
 
-        with open(os.path.join(METAQA_PATH,'kb.txt')) as fin:
+        with open(os.path.join(path,'kb.txt')) as fin:
             edges = [ l.strip().split('|') for l in fin.readlines()]
             
         self._triples = torch.tensor( [ 

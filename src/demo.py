@@ -1,4 +1,5 @@
 #%%
+from class_resolver import UnexpectedKeywordError
 import torch
 from train import RGCNQA, QAData
 from transformers import AutoTokenizer, BertModel
@@ -22,12 +23,12 @@ subgraph = None
 # @click.command()
 # @click.option('--cpu', default=False, show_default=True, is_flag=True)
 # @click.option('--ckpt-folder', default='../checkpoints/*/*/*.ckpt', type=str)
-def main(cpu, ckpt_folder):
+def main(cpu, ckpt_path):
     global device
     
     device = 'cpu' if cpu else  'cuda:0'
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased", )    
-    available_models = glob.glob(ckpt_folder)    
+    available_models = glob.glob(ckpt_path)    
     
     def update_model(model_path):
         global model 
@@ -35,12 +36,14 @@ def main(cpu, ckpt_folder):
         global data
         global device
         global graph
-        
-        model = RGCNQA.load_from_checkpoint(model_path, map_location={'cuda:0': device, 'cpu': device })
-        
+        try:
+            model = RGCNQA.load_from_checkpoint(model_path, map_location={'cuda:0': device, 'cpu': device },bias=False)
+        except UnexpectedKeywordError:
+            model = RGCNQA.load_from_checkpoint(model_path, map_location={'cuda:0': device, 'cpu': device }, bias=False)
+
         if data is None or hops !=  int (model_path.rsplit('/', 2)[1][0]):
             hops = int (model_path.rsplit('/', 2)[1][0])
-            data = QAData('dataset', [hops], tokenizer, use_ntm=False)
+            data = QAData(METAQA_PATH, [hops], tokenizer, use_ntm=False)
             
 
             
@@ -179,7 +182,7 @@ def main(cpu, ckpt_folder):
                                                         src_idx= root,
                                                         question= question)
 
-        ax, G = explainer.visualize_subgraph(answer_index, index, edge_mask, root_idx=root)
+        ax, G = explainer.visualize_subgraph(answer_index, index, edge_mask, src_idx=root)
 
 
         for n in G.nodes():
@@ -270,7 +273,7 @@ def main(cpu, ckpt_folder):
 
 
 if __name__ == '__main__':
-    main(True, 'checkpoints/*/*/*.ckpt' )
+    main(True, '../data/checkpoints/*/*/*.ckpt' )
     
     
 # %%

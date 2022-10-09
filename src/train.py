@@ -1,6 +1,8 @@
 #%%
 from dataloaders import QAData
-from models.rgcnqa import RGCNQA, AutoTokenizer
+from models.rgcnqa import RGCNQA
+from models.embeddings import KGEModel
+from transformers import AutoTokenizer
 import wandb
 import pytorch_lightning as pl
 import click
@@ -11,15 +13,14 @@ from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from pytorch_lightning.trainer.supporters import CombinedLoader
 
 
-from globals import QA_CHECKPOINTS_PATH, METAQA_PATH
+from globals import *
 from utils import get_model_path
-
+from os.path import join
 #%%  
-
 @click.command()
 @click.option('--layer-sizes', default='18|18|18', type=str)
 @click.option('--concat-layers', is_flag=True)
-@click.option('--concat-embeddings', type=click.Choice(['all', 'first', 'last']))
+@click.option('--concat-embeddings', type=click.Choice(['first', 'all', 'all+head', 'head' ]))
 @click.option('--decompose', default=False, is_flag=True)
 @click.option('--lr', default=0.01, type=float)
 @click.option('--l2', default=0.1, type=float)
@@ -36,6 +37,7 @@ from utils import get_model_path
 @click.option('--aggr', default='mean', type=str)
 @click.option('--fast', is_flag=True)
 @click.option('--bert-model', default='prajjwal1/bert-mini', type=str)
+@click.option('--embeddings-model', default='TransEInteraction()|32|epoch=4999|.ckpt', type=str)
 @click.option('--patience', default=3, type=int)
 @click.option('--epochs', default=10000, type=int)
 @click.option('--resume-id', type=str)
@@ -58,6 +60,7 @@ def train( layer_sizes,
             aggr,
             fast,
             bert_model,
+            embeddings_model,
             patience,
             epochs,
             resume_id):
@@ -72,9 +75,23 @@ def train( layer_sizes,
         run = wandb.init( id=resume_id, entity='link-prediction-gnn', project="metaqa-qa",  resume='must')
         model = RGCNQA.load_from_checkpoint(get_model_path(run.name))
     else:
-        model = RGCNQA(qa_data, layer_sizes, decompose, lr, l2, bias, root, zeroed, aggr, bert_model, fast, concat_layers, concat_embeddings)
+        embeddings_model = KGEModel.load_from_checkpoint(join(EMBEDDINGS_CHECKPOINTS_PATH, embeddings_model))
+        model = RGCNQA(qa_data, 
+                        layer_sizes, 
+                        decompose, 
+                        lr, 
+                        l2, 
+                        root, 
+                        zeroed, 
+                        aggr, 
+                        bert_model, 
+                        fast, 
+                        bias, 
+                        concat_layers, 
+                        concat_embeddings, 
+                        embeddings_model)
         run = wandb.init( name=model.get_name(), entity='link-prediction-gnn', project="metaqa-qa", reinit=True)
-    
+
     logger = WandbLogger( log_model=True)
                 
     checkpoint_callback = ModelCheckpoint(
