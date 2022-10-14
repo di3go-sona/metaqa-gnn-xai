@@ -1,125 +1,109 @@
 #%%
+from train import *
+from models.rgcnqa_explainer import RGCNQAExplainer
+from torch_geometric.utils import k_hop_subgraph
+import torch
+from utils import *
+import networkx as nx
 from models.rgcnqa import *
-from models.rgcnqa_explainer import *
 from models.embeddings import *
 from transformers import AutoTokenizer
 from globals import *
-from tqdm import tqdm 
-import torch
+from tqdm import tqdm
+ 
 tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
 
 #%%
-checkpoints_set = {
-    ('Funnel',1): '../data/checkpoints/qa/1-hops/RGCNQA|1_hops|36>1|lr=0.0001|l2=0.0|mean_pool|zeroed|no_bias|no_root|epoch=10.ckpt',
-#     ('Straight',1): '../data/checkpoints/qa/1-hops/RGCNQA|1_hops|36>36|lr=0.0001|l2=0.0|mean_pool|zeroed|no_bias|no_root|epoch=19.ckpt',
-#     ('Concatenated',1): '../data/checkpoints/qa/1-hops/RGCNQA|1_hops|36>36C|lr=0.0001|l2=0.0|mean_pool|zeroed|no_bias|no_root|epoch=13.ckpt',
-#     ('Funnel',2): '../data/checkpoints/qa/2-hops/RGCNQA|2_hops|72>36>1|lr=0.0001|l2=0.0|mean_pool|zeroed|no_root|epoch=37.ckpt',
-#     ('Straight',2): '../data/checkpoints/qa/2-hops/RGCNQA|2_hops|36>36>36|lr=0.0001|l2=0.0|mean_pool|zeroed|no_root|epoch=39.ckpt',
-#     ('Concatenated',2): '../data/checkpoints/qa/2-hops/RGCNQA|2_hops|36>36>36C|lr=0.0001|l2=0.0|mean_pool|zeroed|no_root|epoch=61.ckpt',
-#     ('Straight|Bert-frozen',2): '../data/checkpoints/qa/2-hops/RGCNQA|2_hops|36>36>36|lr=0.0001|l2=0.0|mean_pool|zeroed|no_root|bert_frozen|epoch=129.ckpt',
-    # ('Funnel',3): '../data/checkpoints/qa/3-hops/QA_RGCN|3_hops|72>36>18>1|lr=0.0001|l2=0.0|mean_pool|zeroed|no_root|epoch=974.ckpt',
-    # ('Straight',3): '../data/checkpoints/qa/3-hops/QA_RGCN|3_hops|36>36>36>36|lr=0.0001|l2=0.0|mean_pool|zeroed|no_root|epoch=437.ckpt',
-    # ('Concatenated',3): '../data/checkpoints/qa/3-hops/QA_RGCN|3_hops|36>36>36>36C|lr=0.0001|l2=0.0|mean_pool|zeroed|no_root|epoch=549.ckpt',
-}
+from checkpoints import *
 
 
+#%%
+# Evaluate accuracy 
 
-
-# Evaluate accuracy
 for m, h in checkpoints_set:
-    qa_data = QAData(METAQA_PATH, [h], tokenizer, train_batch_size= 128, val_batch_size= 16, use_ntm= True)
-    qa_model = RGCNQA.load_from_checkpoint(checkpoints_set[( m, h)], bias=False, verbose=False)
-    
-    coeffs = {
-        'edge_size': 1.0,
-        'edge_reduction': 'mean',
-        'node_feat_size': 1.0,
-        'node_feat_reduction': 'mean',
-        'edge_ent': 0.5,
-        'node_feat_ent': 0.0,
-    }
-
-    explainer = RGCNQAExplainer(
-        qa_model,
-        epochs=100,
-        lr=0.01,
-        return_type='prob',
-        feat_mask_type='scalar',
-        num_hops=qa_model.hops,
-        **coeffs)
-    
-    x = qa_model.nodes_emb
-    
-    for src_idx, _, dst_idxs, question in qa_data.val_ds_unflattened:
-        for dst_idx in dst_idxs:
-
-            
-
-            index = qa_model.edge_index.T[[0,2]].cpu()
-            relations = qa_model.edge_index.T[1].cpu()
-
-            subset, index, inv, edge_mask = k_hop_subgraph(src_idx, qa_model.hops, index)
-            relations = relations[edge_mask]
-
-            node_feat_mask, edge_mask = explainer.explain_node(dst_idx, 
-                                                            x,
-                                                            index,
-                                                            relations = relations,
-                                                            src_idx = src_idx,
-                                                            question = question,
-                                                            relabel_nodes = False)
-
-            old_size = torch.concat([*index.T]).unique().size(0)
-            new_size = node_feat_mask.nonzer().sum().item()
-            compression = old_size/(new_size+EPS)*100
-
-            print(compression, old_size, new_size)
-            
-                        
-            g_nodes_index = torch.concat([*index.T]).unique().detach().tolist()
-            g_edge_index = index.T.detach().tolist()
-
-            nodes_mask = node_feat_mask.detach().tolist()
-            edges_mask = edge_mask.detach().tolist()
-
-
-            import networkx as nx
-            G = nx.DiGraph()
-            G.add_nodes_from(g_nodes_index)
-
-
-            for w, n in zip( nodes_mask, g_nodes_index):
-                
-                    
-                attrs = {
-                    'label':  qa_data.entities_names[n],
-                    'size': 10 + int(w/max(nodes_mask)*100),
-                }
-                if n == src_idx:
-                    attrs['color'] = 'yellow'
-                if n == dst_idx:
-                    attrs['color'] = 'green'
-                G.add_node(n, **attrs)
-                
-            from random import randint
-            rel_colors = {
-                i: f"{randint(0, 128)},{randint(0, 128)},{randint(0, 128)}" for i in range(max(relations.tolist())+1)
-            }
-
-            for w, e, r in zip( edges_mask, g_edge_index, relations.tolist()) :
-                print(w,e )
-                attrs = {
-                    'color': f'rgba({rel_colors[r]}, {w})'
-                }
-                G.add_edge(*e, **attrs)
+    xai_accuracy = []
+    xai_size = []
+    qa_data = QAData(METAQA_PATH, [h], tokenizer, train_batch_size= 128, val_batch_size= 4, use_ntm= False)
+    items = []
+    try:
+        qa_model = RGCNQA.load_from_checkpoint(checkpoints_set[( m, h)], bias=False, verbose=False)
+    except Exception:
+        qa_model = RGCNQA.load_from_checkpoint(checkpoints_set[( m, h)], bias=True, verbose=False)
+    for batch_id, batch in tqdm(enumerate(qa_data.test_dataloader())):
+        for batch_subid, acc in enumerate(qa_model.evaluate_batch(batch)):
+            if acc == 1:
+                question_id = batch_id*4 + batch_subid
 
                 
-            from pyvis.network import Network
-            net = Network(directed=True)
-            net.from_nx(G)
-            net.show('nx.html')
+                src_idx, _, dst_idx, question = qa_data.val_ds_unflattened[question_id]
+                
+                golden_nodes, golden_edges = get_golden_path(qa_data, question_id,dst_idx[0])
+                if len(golden_edges) == 0 : continue
+                x = qa_model.nodes_emb
+                
+                raw_index = qa_model.edge_index
+                index = raw_index.T[[0,2]].cpu()
+                relations = raw_index.T[1].cpu()
 
-    # hits_at_k = [ h  for batch in tqdm(list(qa_data.test_dataloader())) for h in qa_model.evaluate_batch(batch)]
-    # print(m, h, sum(hits_at_k)/len(hits_at_k))
+                subset, index, inv, edge_mask = k_hop_subgraph(src_idx, qa_model.hops, index)
+                relations = relations[edge_mask]
 
+
+                coeffs = {
+                        # 'edge_size': 0.7,
+                        # 'edge_reduction': 'mean',
+                        # 'node_feat_size': 0.3  ,
+                        # 'node_feat_reduction': 'mean',
+                        # 'edge_ent': 0.3,
+                        # 'node_feat_ent': 0.3,
+                    }
+
+                explainer = RGCNQAExplainer(
+                    qa_model,
+                    epochs=200,
+                    lr=0.01,
+                    return_type='prob',
+                    feat_mask_type='scalar',
+                    num_hops=qa_model.hops,
+                    **coeffs)
+
+                node_feat_mask, edge_mask = explainer.explain_node(dst_idx[0], 
+                                                                x,
+                                                                index,
+                                                                relations = relations,
+                                                                src_idx = src_idx,
+                                                                question = question,
+                                                                relabel_nodes = False)
+
+                initial_edges = index.size(1)
+                initial_nodes = index.unique().size(0)
+                xai_nodes = (node_feat_mask > 0.5).sum().item()
+                xai_edges = (edge_mask > 0.5).sum().item()
+
+
+                _, _, _, valid_edge_mask = torch_geometric.utils.k_hop_subgraph(dst_idx[0], qa_data.hops[0], index )
+                # print(valid_edge_mask.shape, index.shape, valid_edge_mask)
+                golden_edges = [ge for ge in golden_edges if ge in [ ge for ge in golden_edges if list(ge) in index.T[valid_edge_mask > 0.5].tolist() ] ]
+
+                correct_golden_edges =  [ ge for ge in golden_edges if list(ge) in index.T[edge_mask > 0.5].tolist() ]
+                
+                
+                # print( index.T[edge_mask > 0.5].tolist())
+                # print(golden_edges)
+                try:
+                    items.append((initial_edges, xai_edges, len(golden_edges), len(correct_golden_edges)/len(golden_edges)))
+                    print((initial_edges, xai_edges, len(golden_edges), len(correct_golden_edges)/len(golden_edges)))
+                except:
+                    continue
+        if len(items) > 128:
+            break
+    initial_edges, xai_edges, golden_edges, correct_golden_edges = (sum(l)/len(l) for l in zip(*items))
+    
+
+                
+                
+    with open('../data/explainability.out', 'a') as fout:
+        fout.write(f'\n{m}|{h}|{initial_edges}, {xai_edges}, {golden_edges}, {correct_golden_edges}, {len(items)}')
+
+# cervedc
 # %%

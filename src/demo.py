@@ -1,20 +1,21 @@
 #%%
 from class_resolver import UnexpectedKeywordError
 import torch
+from models.rgcnqa_explainer import RGCNQAExplainer
 from train import RGCNQA, QAData
-from transformers import AutoTokenizer, BertModel
-import click, os, glob
+from transformers import AutoTokenizer
+import glob
 import gradio as gr
 import networkx as nx
-import random
 import matplotlib.pyplot as plt
 from pyvis.network import Network
-from gnn_explainer import *
-
-model = None 
-hops = None
-data = None
-device = None
+from torch_geometric.utils import k_hop_subgraph
+from random import randint
+from utils import *
+model: RGCNQA = None 
+data: QAData = None
+hops: int = None
+device: str = None
 graph = None
 subgraph = None
 
@@ -150,12 +151,25 @@ def main(cpu, ckpt_path):
     def explain(question_index, answer_name, xai_epochs, xai_mask_type, xai_lr, xai_edge_size, xai_node_feat_size, xai_edge_ent, xai_node_feat_ent):
         if not answer_name:
             return None
+        
+        # question_index = 0
+        dst_idx = data.entities_ids[answer_name]
+        x = model.nodes_emb
+        src_idx, _, _, question = data.val_ds_unflattened[question_index]
+        # dst_idx = dst_idx[0]
+        raw_index = model.edge_index
+        index = raw_index.T[[0,2]].cpu()
+        relations = raw_index.T[1].cpu()
+
+        subset, index, inv, edge_mask = k_hop_subgraph(src_idx, model.hops, index)
+        relations = relations[edge_mask]
+
         explainer = RGCNQAExplainer(model,
             epochs=int(xai_epochs),
             lr=xai_lr,
             return_type='prob',
             feat_type=xai_mask_type,
-            num_hops=model.hops,
+                        num_hops=model.hops,
             **{
                 'xai_edge_size':xai_edge_size,
                 'xai_node_feat_size':xai_node_feat_size,
@@ -163,49 +177,75 @@ def main(cpu, ckpt_path):
                 'xai_node_feat_ent':xai_node_feat_ent
                 })
 
-
-        root, _, answers, question = data.val_ds_unflattened[int(question_index)]        
-        
-        index = model.edge_index.T[[0,2]].cpu()
-        relations = model.edge_index.T[1].cpu()
-
-
-        answer_index = data.entities_ids[answer_name]
-        subset, index, inv, edge_mask = k_hop_subgraph(root, model.hops, index)
-        relations = relations[edge_mask]
-        print(edge_mask)
-        
-        node_feat_mask, edge_mask = explainer.explain_node(answer_index, 
-                                                        model.nodes_emb.clone(),
+        node_feat_mask, edge_mask = explainer.explain_node(dst_idx, 
+                                                        x,
                                                         index,
-                                                        relations= relations,
-                                                        src_idx= root,
-                                                        question= question)
+                                                        relations = relations,
+                                                        src_idx = src_idx,
+                                                        question = question,
+                                                        relabel_nodes = False)
 
-        ax, G = explainer.visualize_subgraph(answer_index, index, edge_mask, src_idx=root)
-
-
-        for n in G.nodes():
-            name = data.entities_names[n]
-            G.nodes[n]['label'] = name
-            if 'color' in subgraph.nodes[name]:
-                G.nodes[n]['color'] = subgraph.nodes[name]['color']
-
-        # print(G.edges())
-        # print(subgraph.edges())
-        for e in G.edges():
-            print(G.edges[e]['att'])
-            G.edges[e]['color'] = '#' + hex(int((1-G.edges[e]['att'])*256))[2:] * 3
+        # old_size = torch.concat([*index.T]).unique().size(0)
+        # new_size = (node_feat_mask > 0.5).sum()
+        # compression = new_size/old_size*100
         
+
+
+        # g_nodes_index = range(x.size(1))#subset.tolist()# torch.concat([*index.T]).unique().detach().tolist()
+        g_edge_index = index.T.detach().tolist()
+
+        nodes_mask = node_feat_mask.detach().tolist()
+        edges_mask = edge_mask.detach().tolist()
             
-        net = Network("600px", "1000px", directed =True)
+        golden_nodes, golden_edges = get_golden_path(data, question_index,dst_idx) 
+
+
+        G = nx.DiGraph()
+        print(index.unique().detach().tolist())
+        for n, w in zip( index.unique().detach().tolist(), nodes_mask ):
+            print(n, '->', w )
+            if n in index.unique().detach().tolist():
+                attrs = {
+                    'label':  data.entities_names[n],
+                    'size': 10, # + int(w/max(nodes_mask)*100),
+                }
+                print(n, dst_idx)
+                if n in golden_nodes:
+                    attrs['color'] = '#f5d142'
+                if n == dst_idx:
+                    attrs['color'] = 'green'
+                if n == src_idx:
+                    attrs['color'] = 'black'
+
+                G.add_node(n, **attrs)
+            
+
+        rel_colors = {
+            i: f"{randint(0, 128)},{randint(0, 128)},{randint(0, 128)}" for i in range(max(relations.tolist())+1)
+        }
+
+        for w, e, r in zip( edges_mask, g_edge_index, relations.tolist()) :
+            # print(e, '->', w )
+            attrs = {
+                # 'color': f'rgba({rel_colors[r]}, {w})'
+                'color': f'rgba(0,0,0, {w})'
+                # 'color': f'rgba(0,0,0,1)'
+            }
+            if tuple(e) in golden_edges:
+                attrs['color'] = f'rgba(145, 122, 23, {w})'
+                # attrs['color'] = f'#f5d142'
+            G.add_edge(*e, **attrs)
+
+            
+        from pyvis.network import Network
+        net = Network(directed=True)
         net.from_nx(G)
+
         html = net.generate_html().replace('\"', '\'')
 
     
         return f'''<iframe sandbox="allow-scripts" width="1100px" height="700px" srcdoc="{html}"></iframe>'''
 
-        
     demo = gr.Blocks()
 
     with demo:
@@ -263,12 +303,6 @@ def main(cpu, ckpt_path):
             outputs=plot_box
             )
         
-        
-        
-        
-
-
-
     demo.launch()
 
 

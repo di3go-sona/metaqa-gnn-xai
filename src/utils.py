@@ -1,9 +1,12 @@
 #%%
 import glob
+
+import torch_geometric
 from globals import *
 import linecache
 import os
 import networkx as nx
+import torch
 def get_model_path(model_name):
     candidates = glob.glob(f'{QA_CHECKPOINTS_PATH}/**/{model_name}*')
     if len(candidates) > 1:
@@ -34,16 +37,27 @@ def get_qtype(q_id, q_hops, q_split):
 
 def get_target_type(rel_id):
     dic = {
-        0: 'genre', 
-        1: 'tags', 
-        2: 'writer', 
-        3: 'imdbrating', 
-        4: 'actor', 
-        5: 'language', 
-        6: 'year', 
-        7: 'writer', 
-        8: 'imdbvotes'}
-    return dic.get(rel_id, 'movie')
+        
+        0: ('genre', 'movie'), 
+        9: ('movie', 'genre'),
+        1: ('tags', 'movie'), 
+        10: ('movie', 'tags'),
+        2: ('director', 'movie'), 
+        11: ('movie', 'director'),
+        3: ('imdbrating', 'movie'), 
+        12: ('movie', 'imdbrating'),
+        4: ('actor', 'movie'), 
+        13: ('movie', 'actor'),
+        5: ('language', 'movie'), 
+        14: ('movie', 'language'),
+        6: ('year', 'movie'), 
+        15: ('movie', 'year'),
+        7: ('writer', 'movie'), 
+        16: ('movie', 'writer'),
+        8: ('imdbvotes', 'movie'),
+        17: ('movie', 'imdbvotes')}
+    
+    return dic[rel_id]
 
 def bfs_layers(G, sources):
     """Returns an iterator of all the layers in breadth-first search traversal.
@@ -94,12 +108,28 @@ def bfs_layers(G, sources):
                     visited.add(child)
                     next_layer.append(child)
         current_layer = next_layer
-# %%
 
-def get_golden_path(index, relations, src_idx, question_id, hops, split):
+
+def get_golden_path(qa_data, question_id, dst_idx ):
     golden_nodes = []
     golden_edges = []
-    qtype = get_qtype(question_id, hops, split)
+    
+    src_idx, _, dst_idx, question = qa_data.val_ds_unflattened[question_id]
+    # print(src_idx, _, dst_idx)
+    # print( qa_data.tokenizer.decode(question) )
+    raw_index = qa_data.get_triples()
+    index = raw_index.T[[0,2]].cpu()
+    relations = raw_index.T[1].cpu()
+
+    subset, index, inv, edge_mask = torch_geometric.utils.k_hop_subgraph(src_idx, qa_data.hops[0], index)
+    relations = relations[edge_mask]
+    # subset, index, inv, edge_mask = torch_geometric.utils.k_hop_subgraph(dst_idx, qa_data.hops[0], index, flow='target_to_source')
+    # relations = relations[edge_mask]
+    # print(index)
+    qtype = get_qtype(question_id, qa_data.hops[0], 'dev')
+    # print(relations.shape, index.shape)
+    # print(qtype)
+    # print(index, relations)
     net = nx.DiGraph()
     
     for e, r in zip(index.T.tolist(), relations.tolist()):
@@ -108,23 +138,31 @@ def get_golden_path(index, relations, src_idx, question_id, hops, split):
     
     old_queue = [src_idx]
     queue = []
-    for d in range(1, len(qtype)):
-        golden_dst_type = qtype[d]
+    for d in range(0, len(qtype)-1):
         for src in old_queue:
             for dst in net[src]:
                 r = net.edges[(src, dst)]['label']
-                dst_type = get_target_type(r)
+                src_type, dst_type = get_target_type((r+9)%18)
                 
                 
-                print(d, dst_type, golden_dst_type)
-                if dst_type == golden_dst_type:
+                # print( (src_type,dst_type))
+                if (src_type == qtype[d]) and (dst_type == qtype[d+1]):
                     queue.append((dst))
                     golden_nodes.append(dst)
                     golden_edges.append((src, dst))
                     
         old_queue = queue
         queue = []
+    
+    # print((src_idx, qa_data.hops[0], torch.tensor(golden_edges).long().T))/
+    # print(torch.tensor(golden_edges).T.long())
+    if len(golden_edges) > 0:
+        _, _, _, valid_edge_mask = torch_geometric.utils.k_hop_subgraph(dst_idx, qa_data.hops[0], index )
+        # print(valid_edge_mask.shape, index.shape, valid_edge_mask)
+        golden_edges = [ge for ge in golden_edges if ge in [ ge for ge in golden_edges if list(ge) in index.T[valid_edge_mask > 0.5].tolist() ] ]
 
-            
     return golden_nodes, golden_edges
 
+# golden_nodes, golden_edges = get_golden_path(qa_data, question_id)
+# golden_nodes, golden_edges
+# %%

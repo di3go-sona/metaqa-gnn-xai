@@ -71,7 +71,7 @@ golden_nodes, golden_edges = get_golden_path(index, relations, src_idx, QUESTION
 G = nx.DiGraph()
 
 for w, n in zip( nodes_mask, g_nodes_index):
-    print(n, '->', w )
+    # print(n, '->', w )
         
     attrs = {
         'label':  qa_data.entities_names[n],
@@ -93,7 +93,7 @@ rel_colors = {
 }
 
 for w, e, r in zip( edges_mask, g_edge_index, relations.tolist()) :
-    print(e, '->', w )
+    # print(e, '->', w )
     attrs = {
         # 'color': f'rgba({rel_colors[r]}, {w})'
         'color': f'rgba(0,0,0, {w})'
@@ -111,3 +111,5 @@ net.from_nx(G)
 net.show('nx.html')
 
 
+
+# %%

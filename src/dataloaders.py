@@ -181,7 +181,7 @@ class QAData(EmbeddingsData):
         return DataLoader( 
                 self.val_ds_unflattened,
                 self.val_batch_size,
-                shuffle=True,
+                shuffle=False,
                 collate_fn=qa_batch_collate_unflattened )
           
 
